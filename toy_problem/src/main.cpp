@@ -10,10 +10,17 @@
 
 #include <rmf_utils/optional.hpp>
 
-#include <deque>
+#include <queue>
 #include <eigen3/Eigen/Eigen>
+#include <unordered_map>
+#include <map>
+#include <iostream>
 
 namespace {
+
+using AssignedTasks = std::unordered_map<std::string, std::queue<uint64_t>>;
+using UnassignedTasks =
+  std::unordered_map<uint64_t, std::string>;
 
 struct DeliveryTask
 {
@@ -25,14 +32,26 @@ struct DeliveryTask
 
 struct Robot
 {
-  uint64_t id; // participant id
-  std::size_t start_waypoint;
-  std::deque<uint64_t> task_queue = {};
+  std::string id; // participant id
+  std::size_t next_start_waypoint;
+  // // The durations in seconds from now when the robot is next available.
+  // // If the robot already has a queue of tasks, this time should reflect the
+  // // duration between now and the time when its last task is completed.
+  // double next_available_time;
+};
+
+struct Node
+{
+  AssignedTasks assigned_tasks;
+  UnassignedTasks unassigned_tasks;
 };
 
 class TaskPlanner
 {
 public:
+  using PriorityQueue = std::map<double, Node>;
+  using Robots = std::unordered_map<std::string, Robot>;
+
   TaskPlanner(
     std::vector<DeliveryTask> tasks,
     std::vector<Robot> robots,
@@ -48,25 +67,130 @@ public:
       _robots.insert({robot.id, robot});
 
     _graph = _planner.get_configuration().graph();
+
+    // Initialize the starting node and add it to the priority queue
+    initialize_start();
+
   }
 
   void solve()
   {
-    // Fill up the dqueues for each robot with task-ids 
+    while (!_priority_queue.empty())
+    {
+      auto first_it = _priority_queue.begin();
+      // Check if unassigned tasks is empty -> solution found
+      if (first_it->second.unassigned_tasks.empty())
+      {
+        _goal_node = first_it->second;
+        display_solution(first_it);
+        break;
+      }
+
+      // Apply possible actions to expand the node
+      const Node node_to_expand = first_it->second;
+      const std::size_t num_unassigned = node_to_expand.unassigned_tasks.size();
+      // Create num_unassigned copies and with a newly assigned task
+      
+      // Add copies to priority queue after handling duplicates
+
+      // Pop the front of the priority queue
+      _priority_queue.erase(first_it);
+    }
   }
 
-  void display_solution()
-  {
 
-  }
 
 private:
   std::size_t _num_tasks = 0;
   std::size_t _num_robots = 0;
   std::unordered_map<uint64_t, DeliveryTask> _tasks;
-  std::unordered_map<uint64_t, Robot> _robots;
+  Robots _robots;
   rmf_traffic::agv::Graph _graph;
   rmf_traffic::agv::Planner _planner;
+
+  Node _starting_node;
+  Node _goal_node;
+  PriorityQueue _priority_queue;
+
+  void initialize_start()
+  {
+    for (const auto& robot : _robots)
+      _starting_node.assigned_tasks[robot.first] = {};
+
+    for (const auto& task : _tasks)
+      _starting_node.unassigned_tasks[task.first] = get_best_assignment(
+          _starting_node, _robots, task.first);
+
+    const double starting_f = compute_f(_starting_node);
+    _priority_queue.insert({starting_f, _starting_node});
+  }
+
+  std::string get_best_assignment(
+    const Node& n, const Robots& robots, const uint64_t u)
+  {
+    std::unordered_map<std::string, double> scores;
+    // For each robot agent, get the estimated duration of the task
+    for (const auto agent : n.assigned_tasks)
+    {
+      // Compute the duration of the delivery task given the state of the node
+      scores[agent.first] = get_delivery_estimate(
+        agent.second, _robots[agent.first], u);
+    }
+
+    double best_score = std::numeric_limits<double>::max();
+    std::string best_agent = "";
+    for (const auto& score : scores)
+    {
+      if (score.second <= best_score)
+      {
+        best_score = score.second;
+        best_agent = score.first;
+      }
+    }
+
+    assert(!best_agent.empty());
+    return best_agent;
+  }
+
+  double get_delivery_estimate(
+    const std::queue<uint64_t> queue, const Robot& robot, const uint64_t u)
+  {
+    // TODO
+    return 0.0;
+  }
+
+  double compute_g(const Node n)
+  {
+    // TODO
+    return 0;
+  }
+
+  double compute_h(const Node n)
+  {
+    // TODO
+    return 0;
+  }
+
+  double compute_f(const Node n)
+  {
+    return compute_g(n) + compute_h(n);
+  }
+
+  void display_solution(PriorityQueue::iterator it)
+  {
+    std::cout << "Found solution with score: " << it->first << std::endl;
+    const auto& node = it->second;
+    for (auto assignment: node.assigned_tasks)
+    {
+      std::cout << "Robot: " << assignment.first <<std::endl;
+      while (!assignment.second.empty())
+      {
+        std::cout << "  " << assignment.second.front() << std::endl;
+        assignment.second.pop();
+      }
+    }
+  }
+
 };
 
 rmf_utils::clone_ptr<rmf_traffic::agv::ScheduleRouteValidator>
@@ -83,7 +207,7 @@ make_test_schedule_validator(
 } // anonymous namespace
 
 
-int main(int argc, char* argv[])
+int main()
 {  
   // Graph
   // 00-01-02-03
@@ -135,8 +259,8 @@ int main(int argc, char* argv[])
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<Robot> robots;
   std::vector<DeliveryTask> tasks;
-  Robot robot1{1, 13, {}};
-  Robot robot2{2, 2, {}};
+  Robot robot1{"A", 13};
+  Robot robot2{"B", 2};
   robots.emplace_back(robot1);
   robots.emplace_back(robot2);
   
@@ -155,7 +279,6 @@ int main(int argc, char* argv[])
   };
 
   task_planner.solve();
-  task_planner.display_solution();
   
   return 1;
 }
