@@ -18,13 +18,13 @@
 
 namespace {
 
-using AssignedTasks = std::unordered_map<std::string, std::queue<uint64_t>>;
+using AssignedTasks = std::unordered_map<std::size_t, std::queue<std::size_t>>;
 using UnassignedTasks =
-  std::unordered_map<uint64_t, std::string>;
+  std::unordered_map<std::size_t, std::size_t>;
 
 struct DeliveryTask
 {
-  uint64_t id; // task id
+  std::size_t id; // task id
   rmf_traffic::Time request_time;
   std::size_t pickup_waypoint;
   std::size_t dropoff_waypoint;
@@ -32,7 +32,7 @@ struct DeliveryTask
 
 struct Robot
 {
-  std::string id; // participant id
+  std::size_t id; // participant id
   std::size_t next_start_waypoint;
   // // The durations in seconds from now when the robot is next available.
   // // If the robot already has a queue of tasks, this time should reflect the
@@ -50,7 +50,7 @@ class TaskPlanner
 {
 public:
   using PriorityQueue = std::map<double, Node>;
-  using Robots = std::unordered_map<std::string, Robot>;
+  using Robots = std::unordered_map<std::size_t, Robot>;
 
   TaskPlanner(
     std::vector<DeliveryTask> tasks,
@@ -103,7 +103,7 @@ public:
 private:
   std::size_t _num_tasks = 0;
   std::size_t _num_robots = 0;
-  std::unordered_map<uint64_t, DeliveryTask> _tasks;
+  std::unordered_map<std::size_t, DeliveryTask> _tasks;
   Robots _robots;
   rmf_traffic::agv::Graph _graph;
   rmf_traffic::agv::Planner _planner;
@@ -125,10 +125,10 @@ private:
     _priority_queue.insert({starting_f, _starting_node});
   }
 
-  std::string get_best_assignment(
+  std::size_t get_best_assignment(
     const Node& n, const Robots& robots, const uint64_t u)
   {
-    std::unordered_map<std::string, double> scores;
+    std::unordered_map<std::size_t, double> scores;
     // For each robot agent, get the estimated duration of the task
     for (const auto agent : n.assigned_tasks)
     {
@@ -138,7 +138,7 @@ private:
     }
 
     double best_score = std::numeric_limits<double>::max();
-    std::string best_agent = "";
+    std::size_t best_agent;
     for (const auto& score : scores)
     {
       if (score.second <= best_score)
@@ -148,7 +148,6 @@ private:
       }
     }
 
-    assert(!best_agent.empty());
     return best_agent;
   }
 
@@ -259,8 +258,8 @@ int main()
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<Robot> robots;
   std::vector<DeliveryTask> tasks;
-  Robot robot1{"A", 13};
-  Robot robot2{"B", 2};
+  Robot robot1{1, 13};
+  Robot robot2{2, 2};
   robots.emplace_back(robot1);
   robots.emplace_back(robot2);
   
