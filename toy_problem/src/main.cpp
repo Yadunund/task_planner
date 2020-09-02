@@ -11,6 +11,7 @@
 #include <rmf_utils/optional.hpp>
 
 #include <queue>
+#include <vector>
 #include <eigen3/Eigen/Eigen>
 #include <unordered_map>
 #include <map>
@@ -44,12 +45,28 @@ struct Node
 {
   AssignedTasks assigned_tasks;
   UnassignedTasks unassigned_tasks;
+  double cost_estimate;
+};
+
+using NodePtr = std::shared_ptr<Node>;
+using ConstNodePtr = std::shared_ptr<const Node>;
+
+struct LowestCostEstimate
+{
+  bool operator()(const ConstNodePtr& a, const ConstNodePtr& b)
+  {
+    return b->cost_estimate < a->cost_estimate;
+  }
 };
 
 class TaskPlanner
 {
 public:
-  using PriorityQueue = std::map<double, Node>;
+  using PriorityQueue = std::priority_queue<
+      ConstNodePtr,
+      std::vector<ConstNodePtr>,
+      LowestCostEstimate>;
+
   using Robots = std::unordered_map<std::size_t, Robot>;
 
   TaskPlanner(
@@ -73,56 +90,63 @@ public:
 
   }
 
-  void solve()
+  ConstNodePtr solve()
   {
     while (!_priority_queue.empty())
     {
-      auto first_it = _priority_queue.begin();
+      auto top = _priority_queue.top();
+
+      // Pop the top of the priority queue
+      _priority_queue.pop();
+
       // Check if unassigned tasks is empty -> solution found
-      if (first_it->second.unassigned_tasks.empty())
+      if (top->unassigned_tasks.empty())
       {
-        _goal_node = first_it->second;
-        display_solution(first_it);
-        break;
+        _goal_node = *top;
+        print_node(*top);
+        return top;
       }
 
       // Apply possible actions to expand the node
-      const Node node_to_expand = first_it->second;
-      const std::size_t num_unassigned = node_to_expand.unassigned_tasks.size();
-      // Create num_unassigned copies and with a newly assigned task
+      const auto new_nodes = expand(top);
+      ++_total_queue_expansions;
+      _total_queue_entries += new_nodes.size();
+
+      // Add copies and with a newly assigned task to queue
+      for (const auto&n : new_nodes)
+        _priority_queue.push(n);
       
-      // Add copies to priority queue after handling duplicates
-
-      // Pop the front of the priority queue
-      _priority_queue.erase(first_it);
     }
+
+    return nullptr;
   }
-
-
 
 private:
   std::size_t _num_tasks = 0;
   std::size_t _num_robots = 0;
+  std::size_t _total_queue_entries = 0;
+  std::size_t _total_queue_expansions = 0;
   std::unordered_map<std::size_t, DeliveryTask> _tasks;
   Robots _robots;
   rmf_traffic::agv::Graph _graph;
   rmf_traffic::agv::Planner _planner;
 
-  Node _starting_node;
   Node _goal_node;
   PriorityQueue _priority_queue;
 
   void initialize_start()
   {
+    auto starting_node = std::make_shared<Node>();
     for (const auto& robot : _robots)
-      _starting_node.assigned_tasks[robot.first] = {};
+      starting_node->assigned_tasks[robot.first] = {};
 
     for (const auto& task : _tasks)
-      _starting_node.unassigned_tasks[task.first] = get_best_assignment(
-          _starting_node, _robots, task.first);
+      starting_node->unassigned_tasks[task.first] = get_best_assignment(
+          *starting_node, _robots, task.first);
 
-    const double starting_f = compute_f(_starting_node);
-    _priority_queue.insert({starting_f, _starting_node});
+    starting_node->cost_estimate = compute_f(*starting_node);
+    _priority_queue.push(starting_node);
+    _total_queue_entries++;
   }
 
   std::size_t get_best_assignment(
@@ -158,27 +182,33 @@ private:
     return 0.0;
   }
 
-  double compute_g(const Node n)
+  double compute_g(const Node& n)
   {
     // TODO
     return 0;
   }
 
-  double compute_h(const Node n)
+  double compute_h(const Node& n)
   {
     // TODO
     return 0;
   }
 
-  double compute_f(const Node n)
+  double compute_f(const Node& n)
   {
     return compute_g(n) + compute_h(n);
   }
 
-  void display_solution(PriorityQueue::iterator it)
+  std::vector<ConstNodePtr> expand(ConstNodePtr parent)
   {
-    std::cout << "Found solution with score: " << it->first << std::endl;
-    const auto& node = it->second;
+    std::vector<ConstNodePtr> new_nodes;
+
+    return new_nodes;
+  }
+
+  void print_node(const Node& node)
+  {
+    std::cout << "Cost estimate: " << node.cost_estimate << std::endl;
     for (auto assignment: node.assigned_tasks)
     {
       std::cout << "Robot: " << assignment.first <<std::endl;
