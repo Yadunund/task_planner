@@ -16,31 +16,243 @@
 #include <unordered_map>
 #include <map>
 #include <iostream>
+#include <limits>
 
 namespace {
+// ============================================================================
+struct RobotState
+{
+  std::size_t id;
+  Eigen::Vector2d p;
+  double finish_time = 0.0;
+  static RobotState make(std::size_t id_, Eigen::Vector2d p_)
+  {
+    return RobotState{id_, p_};
+  }
+};
 
-using AssignedTasks = std::unordered_map<std::size_t, std::queue<std::size_t>>;
+// ============================================================================
+class TaskRequest
+{
+public:
+
+  virtual std::size_t id() const = 0;
+  virtual RobotState estimate(const RobotState& initial_state) const = 0;
+
+};
+
+using ConstTaskRequestPtr = std::shared_ptr<TaskRequest>;
+
+// ============================================================================
+class DeliveryTaskRequest : public TaskRequest
+{
+public:
+  using Planner = rmf_traffic::agv::Planner;
+  DeliveryTaskRequest(
+    std::size_t id,
+    std::size_t pickup,
+    std::size_t dropoff,
+    std::shared_ptr<Planner> planner)
+  : _id(id),
+    _pickup_waypoint(pickup),
+    _dropoff_waypoint(dropoff),
+    _planner(planner)
+  {
+    // Do nothing
+  }
+
+static ConstTaskRequestPtr make(
+  std::size_t id,
+  std::size_t pickup,
+  std::size_t dropoff,
+  std::shared_ptr<Planner> planner)
+{
+  return std::make_shared<DeliveryTaskRequest>(id, pickup, dropoff, planner);
+}
+
+std::size_t id() const final
+{
+  return _id;
+}
+
+RobotState estimate(const RobotState& initial_state) const final
+{
+  RobotState state;
+  state.id =initial_state.id;
+  const auto& graph = _planner->get_configuration().graph();
+  state.p = graph.get_waypoint(_dropoff_waypoint).get_location();
+  const auto start_time = std::chrono::steady_clock::now() +
+    rmf_traffic::time::from_seconds(initial_state.finish_time);
+  rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
+  Planner::Start start{
+    start_time,
+    _pickup_waypoint,
+    0.0,
+    std::move(location)};
+
+  Planner::Goal goal{_dropoff_waypoint};
+  
+  const auto result = _planner->plan(start, goal);
+  if (result.success())
+  {
+    const auto& itinerary = result->get_itinerary();
+    state.finish_time = rmf_traffic::time::to_seconds(
+        *itinerary.back().trajectory().finish_time() - start_time);
+  }
+  else
+  {
+    // If we are unsuccessful in generating a plan, set the finish time to infinity
+    state.finish_time = std::numeric_limits<double>::max();
+  }
+
+  return state;
+  
+}
+
+private:
+  std::size_t _id; // task id
+  std::size_t _pickup_waypoint;
+  std::size_t _dropoff_waypoint;
+  std::shared_ptr<Planner> _planner;
+};
+
+// ============================================================================
+class Candidates
+{
+public:
+
+  // struct Entry
+  // {
+  //   std::size_t candidate;
+  //   RobotState state;
+  // };
+
+  // Map finish time to entry
+  using Map = std::multimap<double, RobotState>;
+
+  static Candidates make(
+      const std::vector<RobotState>& initial_states,
+      const TaskRequest& request);
+
+  Candidates(const Candidates& other)
+  {
+    _value_map = other._value_map;
+    _update_map();
+  }
+
+  Candidates& operator=(const Candidates& other)
+  {
+    _value_map = other._value_map;
+    _update_map();
+    return *this;
+  }
+
+  Candidates(Candidates&&) = default;
+  Candidates& operator=(Candidates&&) = default;
+
+  // We have have more than one best candidate so we store their iterators in
+  // a Range
+  struct Range
+  {
+    Map::const_iterator begin;
+    Map::const_iterator end;
+  };
+
+  Range best_candidates() const
+  {
+    assert(!_value_map.empty());
+
+    Range range;
+    range.begin = _value_map.begin();
+    auto it = range.begin;
+    while (it->first == range.begin->first)
+      ++it;
+
+    range.end = it;
+    return range;
+  }
+
+  double best_finish_time() const
+  {
+    assert(!_value_map.empty());
+    return _value_map.begin()->first;
+  }
+
+  void update_candidate(RobotState state)
+  {
+    Map::iterator erase_it;
+    for (auto it = _value_map.begin(); it != _value_map.end(); ++it)
+      if (it->second.id == state.id)
+        erase_it = it;
+    _value_map.erase(erase_it);
+    _candidate_map[state.id] = _value_map.insert(
+      {state.finish_time, state});
+  }
+
+
+private:
+  Map _value_map;
+  std::map<std::size_t, Map::iterator> _candidate_map;
+
+  Candidates(Map candidate_values)
+    : _value_map(std::move(candidate_values))
+  {
+    _update_map();
+  }
+
+  void _update_map()
+  {
+    for (auto it = _value_map.begin(); it != _value_map.end(); ++it)
+    {
+      const auto id = it->second.id;
+      _candidate_map[id] = it;
+    }
+  }
+};
+
+Candidates Candidates::make(
+    const std::vector<RobotState>& initial_states,
+    const TaskRequest& request)
+{
+  Map initial_map;
+  for (const auto& state : initial_states)
+  {
+    const auto finish = request.estimate(state);
+    initial_map.insert({finish.finish_time, finish});
+  }
+
+  return Candidates(std::move(initial_map));
+}
+
+// ============================================================================
+struct PendingTask
+{
+  PendingTask(
+      std::vector<RobotState> initial_states,
+      ConstTaskRequestPtr request_)
+    : request(std::move(request_)),
+      candidates(Candidates::make(initial_states, *request))
+  {
+    // Do nothing
+  }
+
+  ConstTaskRequestPtr request;
+  Candidates candidates;
+};
+
+// ============================================================================
+struct Assignment
+{
+  std::size_t task_id;
+  RobotState state;
+};
+
+using AssignedTasks =
+  std::unordered_map<std::size_t, std::vector<Assignment>>;
 using UnassignedTasks =
-  std::unordered_map<std::size_t, std::size_t>;
+  std::unordered_map<std::size_t, PendingTask>;
 
-struct DeliveryTask
-{
-  std::size_t id; // task id
-  rmf_traffic::Time request_time;
-  std::size_t pickup_waypoint;
-  std::size_t dropoff_waypoint;
-};
-
-struct Robot
-{
-  std::size_t id; // participant id
-  std::size_t next_start_waypoint;
-  // // The durations in seconds from now when the robot is next available.
-  // // If the robot already has a queue of tasks, this time should reflect the
-  // // duration between now and the time when its last task is completed.
-  // double next_available_time;
-};
-
+// ============================================================================
 struct Node
 {
   AssignedTasks assigned_tasks;
@@ -59,6 +271,83 @@ struct LowestCostEstimate
   }
 };
 
+// ============================================================================
+class Filter
+{
+public:
+
+  Filter(bool passthrough)
+    : _passthrough(passthrough)
+  {
+    // Do nothing
+  }
+
+  bool ignore(const Node& node);
+
+private:
+
+  struct TaskTable;
+
+  struct AgentTable
+  {
+    std::unordered_map<std::size_t, std::unique_ptr<TaskTable>> agent;
+  };
+
+  struct TaskTable
+  {
+    std::unordered_map<std::size_t, std::unique_ptr<AgentTable>> task;
+  };
+
+  bool _passthrough;
+  AgentTable _root;
+};
+
+bool Filter::ignore(const Node& node)
+{
+  if (_passthrough)
+    return false;
+
+  bool new_node = false;
+
+  // TODO(MXG): Consider replacing this tree structure with a hash set
+
+  AgentTable* agent_table = &_root;
+  std::size_t a = 0;
+  std::size_t t = 0;
+  // while(a < node.assignments.size())
+  // {
+  //   const auto& current_agent = node.assignments.at(a);
+
+  //   if (t < current_agent.size())
+  //   {
+  //     const auto& task_id = current_agent[t].task_id;
+  //     const auto agent_insertion = agent_table->agent.insert({a, nullptr});
+  //     if (agent_insertion.second)
+  //       agent_insertion.first->second = std::make_unique<TaskTable>();
+
+  //     auto* task_table = agent_insertion.first->second.get();
+
+  //     const auto task_insertion = task_table->task.insert({task_id, nullptr});
+  //     if (task_insertion.second)
+  //     {
+  //       new_node = true;
+  //       task_insertion.first->second = std::make_unique<AgentTable>();
+  //     }
+
+  //     agent_table = task_insertion.first->second.get();
+  //     ++t;
+  //   }
+  //   else
+  //   {
+  //     t = 0;
+  //     ++a;
+  //   }
+  // }
+
+  return !new_node;
+}
+
+// ============================================================================
 class TaskPlanner
 {
 public:
@@ -67,26 +356,24 @@ public:
       std::vector<ConstNodePtr>,
       LowestCostEstimate>;
 
-  using Robots = std::unordered_map<std::size_t, Robot>;
-
   TaskPlanner(
-    std::vector<DeliveryTask> tasks,
-    std::vector<Robot> robots,
-    rmf_traffic::agv::Planner& planner)
-  : _planner(std::move(planner))
+    std::vector<ConstTaskRequestPtr> tasks,
+    std::vector<RobotState> initial_states,
+    const bool use_filter)
+  : _use_filter(use_filter)
   {
-    _num_tasks = tasks.size();
-    _num_robots = robots.size();
+    // Initialize the starting node and add it to the priority queue
+    auto starting_node = std::make_shared<Node>();
+    for (const auto& state : initial_states)
+      starting_node->assigned_tasks[state.id] = {};
 
     for (const auto& task : tasks)
-      _tasks.insert({task.id, task});
-    for (const auto& robot : robots)
-      _robots.insert({robot.id, robot});
+      starting_node->unassigned_tasks.insert(
+        {task->id(), PendingTask(initial_states, task)});
 
-    _graph = _planner.get_configuration().graph();
-
-    // Initialize the starting node and add it to the priority queue
-    initialize_start();
+    starting_node->cost_estimate = compute_f(*starting_node);
+    _priority_queue.push(starting_node);
+    _total_queue_entries++;
 
   }
 
@@ -108,7 +395,8 @@ public:
       }
 
       // Apply possible actions to expand the node
-      const auto new_nodes = expand(top);
+      Filter filter{!_use_filter};
+      const auto new_nodes = expand(top, filter);
       ++_total_queue_expansions;
       _total_queue_entries += new_nodes.size();
 
@@ -122,76 +410,31 @@ public:
   }
 
 private:
-  std::size_t _num_tasks = 0;
-  std::size_t _num_robots = 0;
   std::size_t _total_queue_entries = 0;
   std::size_t _total_queue_expansions = 0;
-  std::unordered_map<std::size_t, DeliveryTask> _tasks;
-  Robots _robots;
-  rmf_traffic::agv::Graph _graph;
-  rmf_traffic::agv::Planner _planner;
-
+  bool _use_filter;
   Node _goal_node;
   PriorityQueue _priority_queue;
 
-  void initialize_start()
+  double compute_g(const Node& node)
   {
-    auto starting_node = std::make_shared<Node>();
-    for (const auto& robot : _robots)
-      starting_node->assigned_tasks[robot.first] = {};
-
-    for (const auto& task : _tasks)
-      starting_node->unassigned_tasks[task.first] = get_best_assignment(
-          *starting_node, _robots, task.first);
-
-    starting_node->cost_estimate = compute_f(*starting_node);
-    _priority_queue.push(starting_node);
-    _total_queue_entries++;
-  }
-
-  std::size_t get_best_assignment(
-    const Node& n, const Robots& robots, const uint64_t u)
-  {
-    std::unordered_map<std::size_t, double> scores;
-    // For each robot agent, get the estimated duration of the task
-    for (const auto agent : n.assigned_tasks)
+    double cost = 0.0;
+    for (const auto& agent : node.assigned_tasks)
     {
-      // Compute the duration of the delivery task given the state of the node
-      scores[agent.first] = get_delivery_estimate(
-        agent.second, _robots[agent.first], u);
-    }
-
-    double best_score = std::numeric_limits<double>::max();
-    std::size_t best_agent;
-    for (const auto& score : scores)
-    {
-      if (score.second <= best_score)
+      for (const auto& assignment : agent.second)
       {
-        best_score = score.second;
-        best_agent = score.first;
+        cost += assignment.state.finish_time;
       }
     }
-
-    return best_agent;
   }
 
-  double get_delivery_estimate(
-    const std::queue<uint64_t> queue, const Robot& robot, const uint64_t u)
+  double compute_h(const Node& node)
   {
-    // TODO
-    return 0.0;
-  }
-
-  double compute_g(const Node& n)
-  {
-    // TODO
-    return 0;
-  }
-
-  double compute_h(const Node& n)
-  {
-    // TODO
-    return 0;
+    double cost = 0.0;
+    for (const auto& u : node.unassigned_tasks)
+    {
+      cost += u.second.candidates.best_finish_time();
+    }
   }
 
   double compute_f(const Node& n)
@@ -199,23 +442,26 @@ private:
     return compute_g(n) + compute_h(n);
   }
 
-  std::vector<ConstNodePtr> expand(ConstNodePtr parent)
+  std::vector<ConstNodePtr> expand(ConstNodePtr parent, Filter& filter)
   {
     std::vector<ConstNodePtr> new_nodes;
-
+    
+    for (const auto& u : parent->unassigned_tasks)
+    {
+      const auto& range = u.second.candidates.best_candidates();
+    }
     return new_nodes;
   }
 
   void print_node(const Node& node)
   {
     std::cout << "Cost estimate: " << node.cost_estimate << std::endl;
-    for (auto assignment: node.assigned_tasks)
+    for (const auto& agent: node.assigned_tasks)
     {
-      std::cout << "Robot: " << assignment.first <<std::endl;
-      while (!assignment.second.empty())
+      std::cout << "Robot: " << agent.first <<std::endl;
+      for (const auto& assignment : agent.second)
       {
-        std::cout << "  " << assignment.second.front() << std::endl;
-        assignment.second.pop();
+        std::cout << "-- " << assignment.task_id <<std::endl;
       }
     }
   }
@@ -271,7 +517,7 @@ int main()
       add_bidir_lane(i,i+4);
   }
 
-
+  
   const auto shape = rmf_traffic::geometry::make_final_convex<
     rmf_traffic::geometry::Circle>(1.0);
   const rmf_traffic::Profile profile{shape, shape};
@@ -280,35 +526,43 @@ int main()
   rmf_traffic::schedule::Database database;
   const auto default_options = rmf_traffic::agv::Planner::Options{
     make_test_schedule_validator(database, profile)};
-  rmf_traffic::agv::Planner planner{
-    rmf_traffic::agv::Planner::Configuration{graph, traits},
-    default_options    
-  };
+    
+  auto planner = std::make_shared<rmf_traffic::agv::Planner>(
+      rmf_traffic::agv::Planner::Configuration{graph, traits},
+      default_options);
+
+  // auto planner = std::make_shared<rmf_traffic::agv::Planner>(
+  //     rmf_traffic::agv::Planner::Configuration(
+  //       std::move(graph),
+  //       std::move(traits)),
+  //     rmf_traffic::agv::Planner::Options(nullptr));
 
   // TODO: parse yaml to obtain list of tasks and robots
-  std::vector<Robot> robots;
-  std::vector<DeliveryTask> tasks;
-  Robot robot1{1, 13};
-  Robot robot2{2, 2};
-  robots.emplace_back(robot1);
-  robots.emplace_back(robot2);
+  std::vector<RobotState> robot_states =
+  {
+    // RobotState::make(1, graph.get_waypoint(13).get_location());
+    // RobotState::make(2, graph.get_waypoint(2).get_location());
+  };
   
-  const auto start_time = std::chrono::steady_clock::now();
-  DeliveryTask task1{1, start_time, 0, 3};
-  DeliveryTask task2{2, start_time, 15, 2};
-  DeliveryTask task3{3, start_time, 7, 9};
-  tasks.emplace_back(task1);
-  tasks.emplace_back(task2);
-  tasks.emplace_back(task3);
-
-  TaskPlanner task_planner{
-    tasks,
-    robots,
-    planner
+  std::vector<ConstTaskRequestPtr> tasks =
+  {
+    // DeliveryTaskRequest::make(1, 0 , 3, planner);
+    // DeliveryTaskRequest::make(2, 15, 2, planner);
+    // DeliveryTaskRequest::make(3, 7, 9, planner);
   };
 
-  task_planner.solve();
+  TaskPlanner task_planner(
+    tasks,
+    robot_states,
+    true
+  );
+
+  const auto solution = task_planner.solve();
   
-  return 1;
+  if (!solution)
+  {
+    std::cout << "No solution found!" << std::endl;
+    return 0;
+  }
 }
 
