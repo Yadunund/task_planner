@@ -121,13 +121,7 @@ class Candidates
 {
 public:
 
-  // struct Entry
-  // {
-  //   std::size_t candidate;
-  //   RobotState state;
-  // };
-
-  // Map finish time to entry
+  // Map finish time to RobotState
   using Map = std::multimap<double, RobotState>;
 
   static Candidates make(
@@ -312,37 +306,37 @@ bool Filter::ignore(const Node& node)
   // TODO(MXG): Consider replacing this tree structure with a hash set
 
   AgentTable* agent_table = &_root;
-  std::size_t a = 0;
+  auto a = node.assigned_tasks.begin();
   std::size_t t = 0;
-  // while(a < node.assignments.size())
-  // {
-  //   const auto& current_agent = node.assignments.at(a);
+  while(a != node.assigned_tasks.end())
+  {
+    const auto& current_agent = a->second;
 
-  //   if (t < current_agent.size())
-  //   {
-  //     const auto& task_id = current_agent[t].task_id;
-  //     const auto agent_insertion = agent_table->agent.insert({a, nullptr});
-  //     if (agent_insertion.second)
-  //       agent_insertion.first->second = std::make_unique<TaskTable>();
+    if (t < current_agent.size())
+    {
+      const auto& task_id = current_agent[t].task_id;
+      const auto agent_insertion = agent_table->agent.insert({a->first, nullptr});
+      if (agent_insertion.second)
+        agent_insertion.first->second = std::make_unique<TaskTable>();
 
-  //     auto* task_table = agent_insertion.first->second.get();
+      auto* task_table = agent_insertion.first->second.get();
 
-  //     const auto task_insertion = task_table->task.insert({task_id, nullptr});
-  //     if (task_insertion.second)
-  //     {
-  //       new_node = true;
-  //       task_insertion.first->second = std::make_unique<AgentTable>();
-  //     }
+      const auto task_insertion = task_table->task.insert({task_id, nullptr});
+      if (task_insertion.second)
+      {
+        new_node = true;
+        task_insertion.first->second = std::make_unique<AgentTable>();
+      }
 
-  //     agent_table = task_insertion.first->second.get();
-  //     ++t;
-  //   }
-  //   else
-  //   {
-  //     t = 0;
-  //     ++a;
-  //   }
-  // }
+      agent_table = task_insertion.first->second.get();
+      ++t;
+    }
+    else
+    {
+      t = 0;
+      ++a;
+    }
+  }
 
   return !new_node;
 }
@@ -390,6 +384,12 @@ public:
       if (top->unassigned_tasks.empty())
       {
         _goal_node = *top;
+        std::cout << "Solution found!" << std::endl;
+        std::cout << "  Nodes added to queue: " << _total_queue_entries
+                  << std::endl;
+        std::cout << "  Nodes expanded: " << _total_queue_expansions
+                  << std::endl;
+        std::cout << "Assignments: " << std::endl;
         print_node(*top);
         return top;
       }
@@ -426,6 +426,8 @@ private:
         cost += assignment.state.finish_time;
       }
     }
+
+    return cost;
   }
 
   double compute_h(const Node& node)
@@ -435,6 +437,8 @@ private:
     {
       cost += u.second.candidates.best_finish_time();
     }
+    
+    return cost;
   }
 
   double compute_f(const Node& n)
@@ -449,6 +453,38 @@ private:
     for (const auto& u : parent->unassigned_tasks)
     {
       const auto& range = u.second.candidates.best_candidates();
+      for (auto it = range.begin; it!= range.end; it++)
+      {
+        auto new_node = std::make_shared<Node>(*parent);
+        const auto& state = it->second;
+        // Assign the unassigned task
+        new_node->assigned_tasks[state.id].push_back(
+          Assignment{u.first, state});
+        
+        // Erase the assigned task from unassigned tasks
+        new_node->unassigned_tasks.erase(u.first);
+
+        // Update states of unassigned tasks for the candidate
+        for (auto& new_u : new_node->unassigned_tasks)
+        {
+          new_u.second.candidates.update_candidate(
+            new_u.second.request->estimate(state));
+        }
+
+        // Update the cost estimate for new_node
+        new_node->cost_estimate = compute_f(*new_node);
+
+        // Apply filter
+        if (filter.ignore(*new_node))
+        {
+          std::cout << "Ignoring node: " << std::endl;
+          print_node(*new_node);
+          continue;
+        }
+
+        new_nodes.push_back(std::move(new_node));
+        
+      }
     }
     return new_nodes;
   }
@@ -461,23 +497,12 @@ private:
       std::cout << "Robot: " << agent.first <<std::endl;
       for (const auto& assignment : agent.second)
       {
-        std::cout << "-- " << assignment.task_id <<std::endl;
+        std::cout << "  --" << assignment.task_id <<std::endl;
       }
     }
   }
 
 };
-
-rmf_utils::clone_ptr<rmf_traffic::agv::ScheduleRouteValidator>
-make_test_schedule_validator(
-  const rmf_traffic::schedule::Viewer& viewer,
-  rmf_traffic::Profile profile)
-{
-  return rmf_utils::make_clone<rmf_traffic::agv::ScheduleRouteValidator>(
-    viewer,
-    std::numeric_limits<rmf_traffic::schedule::ParticipantId>::max(),
-    std::move(profile));
-}
 
 } // anonymous namespace
 
@@ -525,30 +550,25 @@ int main()
     {1.0, 0.7}, {0.6, 0.5}, profile);
   rmf_traffic::schedule::Database database;
   const auto default_options = rmf_traffic::agv::Planner::Options{
-    make_test_schedule_validator(database, profile)};
+    nullptr};
     
   auto planner = std::make_shared<rmf_traffic::agv::Planner>(
       rmf_traffic::agv::Planner::Configuration{graph, traits},
       default_options);
 
-  // auto planner = std::make_shared<rmf_traffic::agv::Planner>(
-  //     rmf_traffic::agv::Planner::Configuration(
-  //       std::move(graph),
-  //       std::move(traits)),
-  //     rmf_traffic::agv::Planner::Options(nullptr));
-
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<RobotState> robot_states =
   {
-    // RobotState::make(1, graph.get_waypoint(13).get_location());
-    // RobotState::make(2, graph.get_waypoint(2).get_location());
+    RobotState::make(1, graph.get_waypoint(13).get_location()),
+    RobotState::make(2, graph.get_waypoint(2).get_location())
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
   {
-    // DeliveryTaskRequest::make(1, 0 , 3, planner);
-    // DeliveryTaskRequest::make(2, 15, 2, planner);
-    // DeliveryTaskRequest::make(3, 7, 9, planner);
+    DeliveryTaskRequest::make(1, 0 , 3, planner),
+    DeliveryTaskRequest::make(2, 15, 2, planner),
+    DeliveryTaskRequest::make(3, 7, 9, planner),
+    DeliveryTaskRequest::make(4, 8, 11, planner)
   };
 
   TaskPlanner task_planner(
