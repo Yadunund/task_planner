@@ -83,6 +83,9 @@ RobotState estimate(const RobotState& initial_state) const final
   state.p = graph.get_waypoint(_dropoff_waypoint).get_location();
   const auto start_time = std::chrono::steady_clock::now() +
     rmf_traffic::time::from_seconds(initial_state.finish_time);
+
+  //(TODO): Duplicate this? Add another planner to plan from location to
+  //  _pickup_waypoint ? 
   rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
   Planner::Start start{
     start_time,
