@@ -97,7 +97,7 @@ RobotState estimate(const RobotState& initial_state) const final
   {
     const auto& itinerary = result->get_itinerary();
     state.finish_time = rmf_traffic::time::to_seconds(
-        *itinerary.back().trajectory().finish_time() - start_time);
+        *itinerary.back().trajectory().finish_time() - std::chrono::steady_clock::now());
   }
   else
   {
@@ -376,10 +376,30 @@ public:
     while (!_priority_queue.empty())
     {
       auto top = _priority_queue.top();
+      auto display_queue = _priority_queue;
+      // while (!display_queue.empty())
+      // {
+        const auto display_top = display_queue.top();
+        auto tasks_map = display_top->assigned_tasks;
+        AssignedTasks::iterator it = tasks_map.begin();
+        display_queue.pop();
+  
+        std::cout<< display_top->cost_estimate << " - Allocated <";
+        while (it != tasks_map.end())
+        {
+          std::cout << it->first << ": [";
+          for (const auto i : it->second)
+            std::cout << " " << i.task_id;
+          it++;
+          std::cout << " ] ";
+        }
+        std::cout <<">"<<std::endl;
+      // }
+      std::cout << "---------------------" << std::endl;
 
       // Pop the top of the priority queue
       _priority_queue.pop();
-
+      
       // Check if unassigned tasks is empty -> solution found
       if (top->unassigned_tasks.empty())
       {
@@ -485,6 +505,7 @@ private:
         new_nodes.push_back(std::move(new_node));
         
       }
+
     }
     return new_nodes;
   }
@@ -526,19 +547,20 @@ int main()
     };
   const double edge_length = 100; //metres
   const std::string map_name = "test_map";
-  for (int i = 0; i < 4; ++i)
+  int grid_size = 5;
+  for (int i = 0; i < grid_size; ++i)
   {
-    for (int j = 0; j < 4; ++j)
+    for (int j = 0; j < grid_size; ++j)
     {
       graph.add_waypoint(map_name, {j*edge_length, -i*edge_length});
     }
   }
 
-  for (int i = 0; i < 16; ++i)
+  for (int i = 0; i < grid_size*grid_size; ++i)
   {
-    if ((i+1) % 4 != 0)
+    if ((i+1) % grid_size != 0)
       add_bidir_lane(i,i+1);
-    if (i + 4 < 16)
+    if (i + grid_size < grid_size*grid_size)
       add_bidir_lane(i,i+4);
   }
 
@@ -565,10 +587,12 @@ int main()
   
   std::vector<ConstTaskRequestPtr> tasks =
   {
-    DeliveryTaskRequest::make(1, 0 , 3, planner),
+    DeliveryTaskRequest::make(1, 24 , 3, planner),
     DeliveryTaskRequest::make(2, 15, 2, planner),
-    DeliveryTaskRequest::make(3, 7, 9, planner),
-    DeliveryTaskRequest::make(4, 8, 11, planner)
+    DeliveryTaskRequest::make(3, 17, 9, planner),
+    DeliveryTaskRequest::make(4, 20, 23, planner),
+    DeliveryTaskRequest::make(5, 13, 2, planner),
+    DeliveryTaskRequest::make(6, 1, 15, planner)
   };
 
   TaskPlanner task_planner(
