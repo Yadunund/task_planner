@@ -27,14 +27,34 @@ struct RobotState
 {
   std::size_t id;
   Eigen::Vector2d p;
+  std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
-  static RobotState make(std::size_t id_, Eigen::Vector2d p_)
+  static RobotState make(
+    std::size_t id_, Eigen::Vector2d p_, std::size_t charging_waypoint_)
   {
-    return RobotState{id_, p_};
+    return RobotState{id_, p_, charging_waypoint_};
   }
 };
 
+std::size_t estimate_waypoint(
+  const Eigen::Vector2d location, const rmf_traffic::agv::Graph& graph)
+{
+  auto nearest_dist = std::numeric_limits<double>::infinity();
+  std::size_t nearest_wp = 0;
+  for (auto i = 0; i < graph.num_waypoints(); ++i)
+  {
+    auto wp_location = graph.get_waypoint(i).get_location();
+    const double dist = (location - wp_location).norm();
+    if (dist < nearest_dist)
+    {
+      nearest_dist = dist;
+      nearest_wp = i;
+    }
+  }
+
+  return nearest_wp;
+}
 // ============================================================================
 class TaskRequest
 {
@@ -46,6 +66,46 @@ public:
 };
 
 using ConstTaskRequestPtr = std::shared_ptr<TaskRequest>;
+
+// ============================================================================
+class ChargeBatteryTaskRequest : public TaskRequest
+{
+public:
+  ChargeBatteryTaskRequest(
+    std::shared_ptr<rmf_battery::agv::BatterySystem> battery_system,
+    std::shared_ptr<rmf_traffic::agv::Planner> planner)
+  : _battery_system(battery_system),
+    _planner(planner)
+  {
+    // Do nothing
+  }
+
+  std::size_t id() const final
+  {
+    return _id;
+  }
+
+  RobotState estimate(const RobotState& initial_state) const final
+  {
+    RobotState state;
+    state.id = initial_state.id;
+
+    // Compute time taken to reach charging waypoint from current location
+
+    double delta_soc = _charge_soc - initial_state.battery_soc;
+    assert(delta_soc >= 0.0);
+
+  }
+
+private:
+  // fixed id for now
+  std::size_t _id = 42;
+  std::shared_ptr<rmf_battery::agv::BatterySystem> _battery_system;
+  std::shared_ptr<rmf_traffic::agv::Planner> _planner;
+  // soc to always charge the battery up to
+  double _charge_soc = 1.0;
+ 
+};
 
 // ============================================================================
 class DeliveryTaskRequest : public TaskRequest
@@ -582,8 +642,8 @@ int main()
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<RobotState> robot_states =
   {
-    RobotState::make(1, graph.get_waypoint(13).get_location()),
-    RobotState::make(2, graph.get_waypoint(2).get_location()),
+    RobotState::make(1, graph.get_waypoint(13).get_location(), 13),
+    RobotState::make(2, graph.get_waypoint(2).get_location(), 2),
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
