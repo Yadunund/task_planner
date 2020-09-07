@@ -29,7 +29,8 @@ struct RobotState
   std::size_t id;
   Eigen::Vector2d p;
   std::size_t charging_waypoint;
-  double finish_time = 0.0;
+  rmf_traffic::Time finish_time = std::chrono::steady_clock::now();
+  double cost = 0.0;
   double battery_soc = 1.0;
   static RobotState make(
     std::size_t id_, Eigen::Vector2d p_, std::size_t charging_waypoint_)
@@ -96,12 +97,11 @@ public:
     const auto& graph = _planner->get_configuration().graph();
     state.p = graph.get_waypoint(
       initial_state.charging_waypoint).get_location();
-    const auto start_time = std::chrono::steady_clock::now() +
-      rmf_traffic::time::from_seconds(initial_state.finish_time);
+    const auto now = std::chrono::steady_clock::now();
     rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
     auto start_wp = estimate_waypoint(initial_state.p, graph);
     rmf_traffic::agv::Planner::Start start{
-      start_time,
+      initial_state.finish_time,
       start_wp,
       0.0,
       std::move(location)};
@@ -114,8 +114,7 @@ public:
       const auto itinerary = result->get_itinerary();
       const auto finish_time = itinerary.back().trajectory().finish_time();
       assert(finish_time);
-      state.finish_time = rmf_traffic::time::to_seconds(
-        *finish_time - start_time);
+      state.finish_time = *finish_time;
     }
 
     // TODO Check if robot has charge to make it back to its charging dock
@@ -127,8 +126,8 @@ public:
     double time_to_charge =
       (3600 * delta_soc * _battery_system->nominal_capacity()) / _battery_system->charging_current();
 
-    state.finish_time += time_to_charge;
-
+    state.finish_time = rmf_traffic::time::apply_offset(state.finish_time, time_to_charge);
+    state.cost = rmf_traffic::time::to_seconds(state.finish_time - now);
     return state;
   }
 
@@ -182,11 +181,9 @@ RobotState estimate(const RobotState& initial_state) const final
   const auto now = std::chrono::steady_clock::now();
   auto initial_waypoint = estimate_waypoint(initial_state.p, graph);
 
-  const auto start_time = now +
-    rmf_traffic::time::from_seconds(initial_state.finish_time);
   rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
   Planner::Start start{
-    start_time,
+    initial_state.finish_time,
     initial_waypoint,
     0.0,
     std::move(location)};
@@ -214,20 +211,17 @@ RobotState estimate(const RobotState& initial_state) const final
       const auto& itinerary = result_to_dropoff->get_itinerary();
       finish_time = itinerary.back().trajectory().finish_time();
       assert(finish_time);
-      state.finish_time += rmf_traffic::time::to_seconds(
-        *finish_time - start_time);
+      state.finish_time = *finish_time;
+      state.cost = rmf_traffic::time::to_seconds(*finish_time - now);
     }
   }
-
-
   else
   {
     // If we are unsuccessful in generating a plan, set the finish time to infinity
-    state.finish_time = std::numeric_limits<double>::max();
+    state.cost = std::numeric_limits<double>::max();
   }
 
   return state;
-  
 }
 
 private:
@@ -287,7 +281,7 @@ public:
     return range;
   }
 
-  double best_finish_time() const
+  double best_cost() const
   {
     assert(!_value_map.empty());
     return _value_map.begin()->first;
@@ -301,7 +295,7 @@ public:
         erase_it = it;
     _value_map.erase(erase_it);
     _candidate_map[state.id] = _value_map.insert(
-      {state.finish_time, state});
+      {state.cost, state});
   }
 
 
@@ -333,7 +327,7 @@ Candidates Candidates::make(
   for (const auto& state : initial_states)
   {
     const auto finish = request.estimate(state);
-    initial_map.insert({finish.finish_time, finish});
+    initial_map.insert({finish.cost, finish});
   }
 
   return Candidates(std::move(initial_map));
@@ -510,6 +504,7 @@ public:
           copy.pop();
           print_node(*top);
         }
+        std::cout<<"==================================================="<<std::endl;
       }
 
       auto top = _priority_queue.top();
@@ -562,7 +557,7 @@ private:
     {
       for (const auto& assignment : agent.second)
       {
-        cost += assignment.state.finish_time;
+        cost += assignment.state.cost;
       }
     }
 
@@ -574,7 +569,7 @@ private:
     double cost = 0.0;
     for (const auto& u : node.unassigned_tasks)
     {
-      cost += u.second.candidates.best_finish_time();
+      cost += u.second.candidates.best_cost();
     }
     
     return cost;
