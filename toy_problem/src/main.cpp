@@ -10,6 +10,7 @@
 
 #include <rmf_battery/agv/SimpleDevicePowerSink.hpp>
 #include <rmf_battery/agv/SimpleMotionPowerSink.hpp>
+#include <rmf_battery/agv/BatterySystem.hpp>
 
 #include <rmf_utils/optional.hpp>
 
@@ -43,7 +44,7 @@ std::size_t estimate_waypoint(
 {
   auto nearest_dist = std::numeric_limits<double>::infinity();
   std::size_t nearest_wp = 0;
-  for (auto i = 0; i < graph.num_waypoints(); ++i)
+  for (std::size_t i = 0; i < graph.num_waypoints(); ++i)
   {
     auto wp_location = graph.get_waypoint(i).get_location();
     const double dist = (location - wp_location).norm();
@@ -89,14 +90,46 @@ public:
 
   RobotState estimate(const RobotState& initial_state) const final
   {
-    RobotState state;
-    state.id = initial_state.id;
+    RobotState state = initial_state;
 
     // Compute time taken to reach charging waypoint from current location
+    const auto& graph = _planner->get_configuration().graph();
+    state.p = graph.get_waypoint(
+      initial_state.charging_waypoint).get_location();
+    const auto start_time = std::chrono::steady_clock::now() +
+      rmf_traffic::time::from_seconds(initial_state.finish_time);
+    rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
+    auto start_wp = estimate_waypoint(initial_state.p, graph);
+    rmf_traffic::agv::Planner::Start start{
+      start_time,
+      start_wp,
+      0.0,
+      std::move(location)};
 
-    double delta_soc = _charge_soc - initial_state.battery_soc;
+    rmf_traffic::agv::Planner::Goal goal{initial_state.charging_waypoint};
+
+    const auto result = _planner->plan(start, goal);
+    if (result.success())
+    {
+      const auto itinerary = result->get_itinerary();
+      const auto finish_time = itinerary.back().trajectory().finish_time();
+      assert(finish_time);
+      state.finish_time = rmf_traffic::time::to_seconds(
+        *finish_time - start_time);
+    }
+
+    // TODO Check if robot has charge to make it back to its charging dock
+    //
+
+    double battery_soc = initial_state.battery_soc;
+    double delta_soc = _charge_soc - battery_soc;
     assert(delta_soc >= 0.0);
+    double time_to_charge =
+      (3600 * delta_soc * _battery_system->nominal_capacity()) / _battery_system->charging_current();
 
+    state.finish_time += time_to_charge;
+
+    return state;
   }
 
 private:
@@ -143,28 +176,50 @@ std::size_t id() const final
 
 RobotState estimate(const RobotState& initial_state) const final
 {
-  RobotState state;
-  state.id =initial_state.id;
+  RobotState state = initial_state;
   const auto& graph = _planner->get_configuration().graph();
   state.p = graph.get_waypoint(_dropoff_waypoint).get_location();
-  const auto start_time = std::chrono::steady_clock::now() +
+  const auto now = std::chrono::steady_clock::now();
+  auto initial_waypoint = estimate_waypoint(initial_state.p, graph);
+
+  const auto start_time = now +
     rmf_traffic::time::from_seconds(initial_state.finish_time);
   rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
   Planner::Start start{
     start_time,
-    _pickup_waypoint,
+    initial_waypoint,
     0.0,
     std::move(location)};
 
-  Planner::Goal goal{_dropoff_waypoint};
+  Planner::Goal goal{_pickup_waypoint};
   
-  const auto result = _planner->plan(start, goal);
-  if (result.success())
+  // First move to waypoint on graph
+  const auto result_to_pickup = _planner->plan(start, goal);
+  if (result_to_pickup.success())
   {
-    const auto& itinerary = result->get_itinerary();
-    state.finish_time = rmf_traffic::time::to_seconds(
-        *itinerary.back().trajectory().finish_time() - start_time);
+    const auto& itinerary = result_to_pickup->get_itinerary();
+    auto finish_time = itinerary.back().trajectory().finish_time();
+    assert(finish_time);
+
+    Planner::Start start_2{
+      *finish_time,
+      _pickup_waypoint,
+      0.0};
+
+    Planner::Goal goal_2{_dropoff_waypoint};
+
+    const auto result_to_dropoff = _planner->plan(start, goal);
+    if (result_to_dropoff.success())
+    {
+      const auto& itinerary = result_to_dropoff->get_itinerary();
+      finish_time = itinerary.back().trajectory().finish_time();
+      assert(finish_time);
+      state.finish_time += rmf_traffic::time::to_seconds(
+        *finish_time - start_time);
+    }
   }
+
+
   else
   {
     // If we are unsuccessful in generating a plan, set the finish time to infinity
@@ -563,6 +618,7 @@ private:
         {
           std::cout << "Ignoring node: " << std::endl;
           print_node(*new_node);
+          std::cout << "==============================================" << std::endl;
           continue;
         }
 
@@ -575,16 +631,37 @@ private:
 
   void print_node(const Node& node)
   {
-    std::cout << "Cost estimate: " << node.cost_estimate << std::endl;
-    for (const auto& agent: node.assigned_tasks)
+    std::cout << " -- " << node.cost_estimate << ": <";
+    bool first = true;
+    for (const auto& agent : node.assigned_tasks)
     {
-      std::cout << "  Robot: " << agent.first <<std::endl;
-      for (const auto& assignment : agent.second)
-      {
-        std::cout << "    --" << assignment.task_id <<std::endl;
-      }
+      if (first)
+        first = false;
+      else
+        std::cout << ", ";
+
+      std::cout << agent.first << ": [";
+      for (const auto i : agent.second)
+        std::cout << " " << i.task_id;
+      std::cout << " ]";
     }
-    std::cout << "==============================================" << std::endl;
+
+    std::cout << " -- ";
+    first = true;
+    for (const auto& u : node.unassigned_tasks)
+    {
+      if (first)
+        first = false;
+      else
+        std::cout << ", ";
+
+      std::cout << u.first << ":";
+      const auto& range = u.second.candidates.best_candidates();
+      for (auto it = range.begin; it != range.end; ++it)
+        std::cout << " " << it->second.id;
+    }
+
+    std::cout << ">" << std::endl;
   }
 
 };
@@ -659,7 +736,7 @@ int main()
     DeliveryTaskRequest::make(7, 8, 14, planner),
     DeliveryTaskRequest::make(8, 5, 11, planner),
     DeliveryTaskRequest::make(9, 9, 0, planner),
-    DeliveryTaskRequest::make(10, 1, 3, planner),
+    DeliveryTaskRequest::make(10, 1, 3, planner)
   };
 
   TaskPlanner task_planner(
