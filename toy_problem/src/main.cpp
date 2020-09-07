@@ -8,6 +8,9 @@
 #include <rmf_traffic/schedule/Viewer.hpp>
 #include <rmf_traffic/schedule/Database.hpp>
 
+#include <rmf_battery/agv/SimpleDevicePowerSink.hpp>
+#include <rmf_battery/agv/SimpleMotionPowerSink.hpp>
+
 #include <rmf_utils/optional.hpp>
 
 #include <queue>
@@ -25,6 +28,7 @@ struct RobotState
   std::size_t id;
   Eigen::Vector2d p;
   double finish_time = 0.0;
+  double battery_soc = 1.0;
   static RobotState make(std::size_t id_, Eigen::Vector2d p_)
   {
     return RobotState{id_, p_};
@@ -353,8 +357,10 @@ public:
   TaskPlanner(
     std::vector<ConstTaskRequestPtr> tasks,
     std::vector<RobotState> initial_states,
-    const bool use_filter)
-  : _use_filter(use_filter)
+    const bool use_filter,
+    const bool debug)
+  : _use_filter(use_filter),
+    _debug(debug)
   {
     // Initialize the starting node and add it to the priority queue
     auto starting_node = std::make_shared<Node>();
@@ -373,8 +379,22 @@ public:
 
   ConstNodePtr solve()
   {
+    Filter filter{!_use_filter};
+
     while (!_priority_queue.empty())
     {
+      // Print the nodes if debug is true
+      if (_debug)
+      {
+        auto copy = _priority_queue;
+        while (!copy.empty())
+        {
+          const auto top = copy.top();
+          copy.pop();
+          print_node(*top);
+        }
+      }
+
       auto top = _priority_queue.top();
 
       // Pop the top of the priority queue
@@ -385,6 +405,8 @@ public:
       {
         _goal_node = *top;
         std::cout << "Solution found!" << std::endl;
+        std::cout << "  Final queue size: " << _priority_queue.size()
+                  << std::endl;
         std::cout << "  Nodes added to queue: " << _total_queue_entries
                   << std::endl;
         std::cout << "  Nodes expanded: " << _total_queue_expansions
@@ -395,7 +417,6 @@ public:
       }
 
       // Apply possible actions to expand the node
-      Filter filter{!_use_filter};
       const auto new_nodes = expand(top, filter);
       ++_total_queue_expansions;
       _total_queue_entries += new_nodes.size();
@@ -413,6 +434,7 @@ private:
   std::size_t _total_queue_entries = 0;
   std::size_t _total_queue_expansions = 0;
   bool _use_filter;
+  bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
 
@@ -494,12 +516,13 @@ private:
     std::cout << "Cost estimate: " << node.cost_estimate << std::endl;
     for (const auto& agent: node.assigned_tasks)
     {
-      std::cout << "Robot: " << agent.first <<std::endl;
+      std::cout << "  Robot: " << agent.first <<std::endl;
       for (const auto& assignment : agent.second)
       {
-        std::cout << "  --" << assignment.task_id <<std::endl;
+        std::cout << "    --" << assignment.task_id <<std::endl;
       }
     }
+    std::cout << "==============================================" << std::endl;
   }
 
 };
@@ -560,7 +583,7 @@ int main()
   std::vector<RobotState> robot_states =
   {
     RobotState::make(1, graph.get_waypoint(13).get_location()),
-    RobotState::make(2, graph.get_waypoint(2).get_location())
+    RobotState::make(2, graph.get_waypoint(2).get_location()),
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
@@ -568,12 +591,19 @@ int main()
     DeliveryTaskRequest::make(1, 0 , 3, planner),
     DeliveryTaskRequest::make(2, 15, 2, planner),
     DeliveryTaskRequest::make(3, 7, 9, planner),
-    DeliveryTaskRequest::make(4, 8, 11, planner)
+    DeliveryTaskRequest::make(4, 8, 11, planner),
+    DeliveryTaskRequest::make(5, 10, 0, planner),
+    DeliveryTaskRequest::make(6, 4, 8, planner),
+    DeliveryTaskRequest::make(7, 8, 14, planner),
+    DeliveryTaskRequest::make(8, 5, 11, planner),
+    DeliveryTaskRequest::make(9, 9, 0, planner),
+    DeliveryTaskRequest::make(10, 1, 3, planner),
   };
 
   TaskPlanner task_planner(
     tasks,
     robot_states,
+    true,
     true
   );
 

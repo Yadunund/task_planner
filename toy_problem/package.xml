@@ -10,6 +10,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rmf_traffic</depend>
+  <depend>rmf_battery</depend>
   <depend>eigen</depend>
   
   <export>
