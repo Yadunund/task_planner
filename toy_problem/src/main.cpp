@@ -37,6 +37,7 @@ struct RobotState
   }
 };
 
+// ============================================================================
 std::size_t estimate_waypoint(
   const Eigen::Vector2d location, const rmf_traffic::agv::Graph& graph)
 {
@@ -55,6 +56,7 @@ std::size_t estimate_waypoint(
 
   return nearest_wp;
 }
+
 // ============================================================================
 class TaskRequest
 {
