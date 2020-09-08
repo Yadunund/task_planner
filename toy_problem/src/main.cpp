@@ -65,7 +65,8 @@ class TaskRequest
 public:
 
   virtual std::size_t id() const = 0;
-  virtual RobotState estimate(const RobotState& initial_state) const = 0;
+  virtual rmf_utils::optional<RobotState> estimate(
+    const RobotState& initial_state) const = 0;
 
 };
 
@@ -84,18 +85,25 @@ public:
     // Do nothing
   }
 
+  static ConstTaskRequestPtr make(
+  std::shared_ptr<rmf_battery::agv::BatterySystem> battery_system,
+  std::shared_ptr<rmf_traffic::agv::Planner> planner)
+  {
+    return std::make_shared<ChargeBatteryTaskRequest>(battery_system, planner);
+  }
+
   std::size_t id() const final
   {
     return _id;
   }
 
-  RobotState estimate(const RobotState& initial_state) const final
+  rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const final
   {
-    RobotState state = initial_state;
+    rmf_utils::optional<RobotState> state = initial_state;
 
     // Compute time taken to reach charging waypoint from current location
     const auto& graph = _planner->get_configuration().graph();
-    state.p = graph.get_waypoint(
+    state->p = graph.get_waypoint(
       initial_state.charging_waypoint).get_location();
     const auto now = std::chrono::steady_clock::now();
     rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
@@ -114,7 +122,7 @@ public:
       const auto itinerary = result->get_itinerary();
       const auto finish_time = itinerary.back().trajectory().finish_time();
       assert(finish_time);
-      state.finish_time = *finish_time;
+      state->finish_time = *finish_time;
     }
 
     // TODO Check if robot has charge to make it back to its charging dock
@@ -126,8 +134,8 @@ public:
     double time_to_charge =
       (3600 * delta_soc * _battery_system->nominal_capacity()) / _battery_system->charging_current();
 
-    state.finish_time = rmf_traffic::time::apply_offset(state.finish_time, time_to_charge);
-    state.cost = rmf_traffic::time::to_seconds(state.finish_time - now);
+    state->finish_time = rmf_traffic::time::apply_offset(state->finish_time, time_to_charge);
+    state->cost = rmf_traffic::time::to_seconds(state->finish_time - now);
     return state;
   }
 
@@ -173,11 +181,11 @@ std::size_t id() const final
   return _id;
 }
 
-RobotState estimate(const RobotState& initial_state) const final
+rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const final
 {
-  RobotState state = initial_state;
+  rmf_utils::optional<RobotState> state = initial_state;
   const auto& graph = _planner->get_configuration().graph();
-  state.p = graph.get_waypoint(_dropoff_waypoint).get_location();
+  state->p = graph.get_waypoint(_dropoff_waypoint).get_location();
   const auto now = std::chrono::steady_clock::now();
   auto initial_waypoint = estimate_waypoint(initial_state.p, graph);
 
@@ -205,20 +213,26 @@ RobotState estimate(const RobotState& initial_state) const final
 
     Planner::Goal goal_2{_dropoff_waypoint};
 
-    const auto result_to_dropoff = _planner->plan(start, goal);
+    const auto result_to_dropoff = _planner->plan(start_2, goal_2);
     if (result_to_dropoff.success())
     {
       const auto& itinerary = result_to_dropoff->get_itinerary();
       finish_time = itinerary.back().trajectory().finish_time();
       assert(finish_time);
-      state.finish_time = *finish_time;
-      state.cost = rmf_traffic::time::to_seconds(*finish_time - now);
+      state->finish_time = *finish_time;
+      state->cost = rmf_traffic::time::to_seconds(*finish_time - now);
     }
+    else
+    {
+      return rmf_utils::nullopt;
+    }
+    
   }
   else
   {
-    // If we are unsuccessful in generating a plan, set the finish time to infinity
-    state.cost = std::numeric_limits<double>::max();
+    // If we are unsuccessful in generating a plan, set the cost to infinity
+    // state->cost = std::numeric_limits<double>::max();
+    return rmf_utils::nullopt;
   }
 
   return state;
@@ -327,7 +341,10 @@ Candidates Candidates::make(
   for (const auto& state : initial_states)
   {
     const auto finish = request.estimate(state);
-    initial_map.insert({finish.cost, finish});
+    if (finish.has_value())
+    {
+      initial_map.insert({finish->cost, finish.value()});
+    }
   }
 
   return Candidates(std::move(initial_map));
@@ -464,13 +481,16 @@ public:
       ConstNodePtr,
       std::vector<ConstNodePtr>,
       LowestCostEstimate>;
+  using BatterySystem = rmf_battery::agv::BatterySystem;
 
   TaskPlanner(
     std::vector<ConstTaskRequestPtr> tasks,
     std::vector<RobotState> initial_states,
+    ConstTaskRequestPtr charge_battery,
     const bool use_filter,
     const bool debug)
-  : _use_filter(use_filter),
+  : _charge_battery(charge_battery),
+    _use_filter(use_filter),
     _debug(debug)
   {
     // Initialize the starting node and add it to the priority queue
@@ -545,10 +565,14 @@ public:
 private:
   std::size_t _total_queue_entries = 0;
   std::size_t _total_queue_expansions = 0;
+
+  ConstTaskRequestPtr _charge_battery;
+
   bool _use_filter;
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
+
 
   double compute_g(const Node& node)
   {
@@ -599,11 +623,21 @@ private:
         new_node->unassigned_tasks.erase(u.first);
 
         // Update states of unassigned tasks for the candidate
+        bool discard = false;
         for (auto& new_u : new_node->unassigned_tasks)
         {
-          new_u.second.candidates.update_candidate(
-            new_u.second.request->estimate(state));
+          const auto finish = new_u.second.request->estimate(state);
+          if (finish.has_value())
+          {
+            new_u.second.candidates.update_candidate(
+              finish.value());
+          }
+          else
+            discard = true;
         }
+
+        if (discard)
+          continue;
 
         // Update the cost estimate for new_node
         new_node->cost_estimate = compute_f(*new_node);
@@ -621,6 +655,14 @@ private:
         
       }
     }
+
+    // TODO Assign charging task to each robot
+    for (auto agent : parent->assigned_tasks)
+    {
+      auto new_node = std::make_shared<Node>(*parent);
+
+    }
+
     return new_nodes;
   }
 
@@ -717,7 +759,7 @@ int main()
   std::vector<RobotState> robot_states =
   {
     RobotState::make(1, graph.get_waypoint(13).get_location(), 13),
-    RobotState::make(2, graph.get_waypoint(2).get_location(), 2),
+    RobotState::make(2, graph.get_waypoint(2).get_location(), 2)
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
@@ -734,12 +776,21 @@ int main()
     DeliveryTaskRequest::make(10, 1, 3, planner)
   };
 
+  std::shared_ptr<rmf_battery::agv::BatterySystem> battery_system =
+    std::make_shared<rmf_battery::agv::BatterySystem>(24.0, 40.0, 2.0);
+
+  auto charge_battery_task = ChargeBatteryTaskRequest::make(
+    battery_system, planner);
+
   TaskPlanner task_planner(
     tasks,
     robot_states,
+    charge_battery_task,
     true,
     true
   );
+
+  clock_t tStart = clock();
 
   const auto solution = task_planner.solve();
   
@@ -748,5 +799,6 @@ int main()
     std::cout << "No solution found!" << std::endl;
     return 0;
   }
+  printf("Time taken: %.4fs\n", (double)(clock() - tStart)/CLOCKS_PER_SEC);
 }
 
