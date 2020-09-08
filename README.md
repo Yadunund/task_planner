@@ -13,6 +13,6 @@ colcon build --packages-up-to toy_problem
 ```
 
 ## Run
-```
-./build/top_problem/toy_problem
+```bash
+./build/toy_problem/toy_problem vnofisnfovbs src/task_planner/task_config.yaml
 ```
