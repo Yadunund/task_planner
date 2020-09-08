@@ -21,42 +21,43 @@
 #include <map>
 #include <iostream>
 #include <limits>
+#include <cstdlib>
 
 namespace {
 // ============================================================================
 struct RobotState
 {
   std::size_t id;
-  Eigen::Vector2d p;
+  std::size_t waypoint;
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
   static RobotState make(
-    std::size_t id_, Eigen::Vector2d p_, std::size_t charging_waypoint_)
+    std::size_t id_, std::size_t wp_, std::size_t c_wp_)
   {
-    return RobotState{id_, p_, charging_waypoint_};
+    return RobotState{id_, wp_, c_wp_};
   }
 };
 
 // ============================================================================
-std::size_t estimate_waypoint(
-  const Eigen::Vector2d location, const rmf_traffic::agv::Graph& graph)
-{
-  auto nearest_dist = std::numeric_limits<double>::infinity();
-  std::size_t nearest_wp = 0;
-  for (std::size_t i = 0; i < graph.num_waypoints(); ++i)
-  {
-    auto wp_location = graph.get_waypoint(i).get_location();
-    const double dist = (location - wp_location).norm();
-    if (dist < nearest_dist)
-    {
-      nearest_dist = dist;
-      nearest_wp = i;
-    }
-  }
+// std::size_t estimate_waypoint(
+//   const Eigen::Vector2d location, const rmf_traffic::agv::Graph& graph)
+// {
+//   auto nearest_dist = std::numeric_limits<double>::infinity();
+//   std::size_t nearest_wp = 0;
+//   for (std::size_t i = 0; i < graph.num_waypoints(); ++i)
+//   {
+//     auto wp_location = graph.get_waypoint(i).get_location();
+//     const double dist = (location - wp_location).norm();
+//     if (dist < nearest_dist)
+//     {
+//       nearest_dist = dist;
+//       nearest_wp = i;
+//     }
+//   }
 
-  return nearest_wp;
-}
+//   return nearest_wp;
+// }
 
 // ============================================================================
 class TaskRequest
@@ -101,30 +102,18 @@ public:
     rmf_utils::optional<RobotState> state = initial_state;
 
     // Compute time taken to reach charging waypoint from current location
-    const auto& graph = _planner->get_configuration().graph();
-    state->p = graph.get_waypoint(
-      initial_state.charging_waypoint).get_location();
+    state->waypoint = initial_state.charging_waypoint;
     const auto start_time = std::chrono::steady_clock::now() +
       rmf_traffic::time::from_seconds(initial_state.finish_time);
-    rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
-    auto start_wp = estimate_waypoint(initial_state.p, graph);
     rmf_traffic::agv::Planner::Start start{
       start_time,
-      start_wp,
-      0.0,
-      std::move(location)};
+      initial_state.waypoint,
+      0.0};
 
     rmf_traffic::agv::Planner::Goal goal{initial_state.charging_waypoint};
 
-    const auto result = _planner->plan(start, goal);
-    if (result.success())
-    {
-      const auto itinerary = result->get_itinerary();
-      const auto finish_time = itinerary.back().trajectory().finish_time();
-      assert(finish_time);
-      state->finish_time = rmf_traffic::time::to_seconds(
-        *finish_time - start_time);
-    }
+    const auto result = _planner->setup(start, goal);
+    state->finish_time += result.initial_cost_estimate();
 
     // TODO Check if robot has charge to make it back to its charging dock
     //
@@ -185,60 +174,32 @@ std::size_t id() const final
 rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const final
 {
   rmf_utils::optional<RobotState> state = initial_state;
-  const auto& graph = _planner->get_configuration().graph();
-  state->p = graph.get_waypoint(_dropoff_waypoint).get_location();
+  state->waypoint = _dropoff_waypoint;
   const auto now = std::chrono::steady_clock::now();
-  auto initial_waypoint = estimate_waypoint(initial_state.p, graph);
 
   const auto start_time = now +
     rmf_traffic::time::from_seconds(initial_state.finish_time);
-  rmf_utils::optional<Eigen::Vector2d> location = initial_state.p;
   Planner::Start start{
     start_time,
-    initial_waypoint,
-    0.0,
-    std::move(location)};
+    initial_state.waypoint,
+    0.0};
 
   Planner::Goal goal{_pickup_waypoint};
   
   // First move to waypoint on graph
-  const auto result_to_pickup = _planner->plan(start, goal);
-  if (result_to_pickup.success())
-  {
-    const auto& itinerary = result_to_pickup->get_itinerary();
-    auto finish_time = itinerary.back().trajectory().finish_time();
-    assert(finish_time);
+  const auto result_to_pickup = _planner->setup(start, goal);
+  const double cost_estimate = result_to_pickup.initial_cost_estimate();
+  state->finish_time += cost_estimate;
 
-    Planner::Start start_2{
-      *finish_time,
-      _pickup_waypoint,
-      0.0};
+  Planner::Start start_2{
+    rmf_traffic::time::apply_offset(start_time, cost_estimate),
+    _pickup_waypoint,
+    0.0};
 
-    Planner::Goal goal_2{_dropoff_waypoint};
+  Planner::Goal goal_2{_dropoff_waypoint};
 
-    const auto result_to_dropoff = _planner->plan(start_2, goal_2);
-    if (result_to_dropoff.success())
-    {
-      const auto& itinerary = result_to_dropoff->get_itinerary();
-      finish_time = itinerary.back().trajectory().finish_time();
-      assert(finish_time);
-      state->finish_time += rmf_traffic::time::to_seconds(
-        *finish_time - start_time);
-    }
-    else
-    {
-      return rmf_utils::nullopt;
-    }
-    
-  }
-
-
-  else
-  {
-    // If we are unsuccessful in generating a plan, set the finish time to infinity
-    // state->finish_time = std::numeric_limits<double>::max();
-    return rmf_utils::nullopt;
-  }
+  const auto result_to_dropoff = _planner->setup(start_2, goal_2);
+  state->finish_time += result_to_dropoff.initial_cost_estimate();    
 
   return state;
   
@@ -662,11 +623,11 @@ private:
     }
 
     // TODO Assign charging task to each robot
-    for (auto agent : parent->assigned_tasks)
-    {
-      auto new_node = std::make_shared<Node>(*parent);
+    // for (auto agent : parent->assigned_tasks)
+    // {
+    //   auto new_node = std::make_shared<Node>(*parent);
 
-    }
+    // }
 
     return new_nodes;
   }
@@ -712,7 +673,8 @@ private:
 
 
 int main()
-{  
+{ 
+  srand(42);
   // Graph
   // 00-01-02-03
   // |  |  |  |
@@ -734,7 +696,9 @@ int main()
   {
     for (int j = 0; j < 4; ++j)
     {
-      graph.add_waypoint(map_name, {j*edge_length, -i*edge_length});
+      // const auto random = (double) rand() / RAND_MAX;
+      const double random = 1.0;
+      graph.add_waypoint(map_name, {j*edge_length*random, -i*edge_length*random});
     }
   }
 
@@ -763,8 +727,11 @@ int main()
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<RobotState> robot_states =
   {
-    RobotState::make(1, graph.get_waypoint(13).get_location(), 13),
-    RobotState::make(2, graph.get_waypoint(2).get_location(), 2),
+    RobotState::make(1, 13, 13),
+    RobotState::make(2, 2, 2),
+    // RobotState::make(3, 5, 5),
+    // RobotState::make(4, 8, 8),
+    // RobotState::make(5, 10, 10),
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
@@ -775,10 +742,10 @@ int main()
     DeliveryTaskRequest::make(4, 8, 11, planner),
     DeliveryTaskRequest::make(5, 10, 0, planner),
     DeliveryTaskRequest::make(6, 4, 8, planner),
-    DeliveryTaskRequest::make(7, 8, 14, planner),
-    DeliveryTaskRequest::make(8, 5, 11, planner),
-    DeliveryTaskRequest::make(9, 9, 0, planner),
-    DeliveryTaskRequest::make(10, 1, 3, planner)
+    // DeliveryTaskRequest::make(7, 8, 14, planner),
+    // DeliveryTaskRequest::make(8, 5, 11, planner),
+    // DeliveryTaskRequest::make(9, 9, 0, planner),
+    // DeliveryTaskRequest::make(10, 1, 3, planner)
   };
 
   std::shared_ptr<rmf_battery::agv::BatterySystem> battery_system =
@@ -795,7 +762,12 @@ int main()
     true
   );
 
+  const auto begin_time = std::chrono::steady_clock::now();
   const auto solution = task_planner.solve();
+  const auto end_time = std::chrono::steady_clock::now();
+  const double time_to_solve = rmf_traffic::time::to_seconds(
+    end_time - begin_time);
+  std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
   
   if (!solution)
   {
