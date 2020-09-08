@@ -1,7 +1,8 @@
 #include "TaskAllocation.cpp"
 
 int main()
-{  
+{ 
+  srand(42);
   // Graph
   // 00-01-02-03
   // |  |  |  |
@@ -23,7 +24,9 @@ int main()
   {
     for (int j = 0; j < 4; ++j)
     {
-      graph.add_waypoint(map_name, {j*edge_length, -i*edge_length});
+      // const auto random = (double) rand() / RAND_MAX;
+      const double random = 1.0;
+      graph.add_waypoint(map_name, {j*edge_length*random, -i*edge_length*random});
     }
   }
 
@@ -51,8 +54,11 @@ int main()
   // TODO: parse yaml to obtain list of tasks and robots
   std::vector<RobotState> robot_states =
   {
-    RobotState::make(1, graph.get_waypoint(13).get_location(), 13),
-    RobotState::make(2, graph.get_waypoint(2).get_location(), 2),
+    RobotState::make(1, 13, 13),
+    RobotState::make(2, 2, 2),
+    // RobotState::make(3, 5, 5),
+    // RobotState::make(4, 8, 8),
+    // RobotState::make(5, 10, 10),
   };
   
   std::vector<ConstTaskRequestPtr> tasks =
@@ -63,10 +69,10 @@ int main()
     DeliveryTaskRequest::make(4, 8, 11, planner),
     DeliveryTaskRequest::make(5, 10, 0, planner),
     DeliveryTaskRequest::make(6, 4, 8, planner),
-    DeliveryTaskRequest::make(7, 8, 14, planner),
-    DeliveryTaskRequest::make(8, 5, 11, planner),
-    DeliveryTaskRequest::make(9, 9, 0, planner),
-    DeliveryTaskRequest::make(10, 1, 3, planner)
+    // DeliveryTaskRequest::make(7, 8, 14, planner),
+    // DeliveryTaskRequest::make(8, 5, 11, planner),
+    // DeliveryTaskRequest::make(9, 9, 0, planner),
+    // DeliveryTaskRequest::make(10, 1, 3, planner)
   };
 
   std::shared_ptr<rmf_battery::agv::BatterySystem> battery_system =
@@ -83,7 +89,12 @@ int main()
     true
   );
 
+  const auto begin_time = std::chrono::steady_clock::now();
   const auto solution = task_planner.solve();
+  const auto end_time = std::chrono::steady_clock::now();
+  const double time_to_solve = rmf_traffic::time::to_seconds(
+    end_time - begin_time);
+  std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
   
   if (!solution)
   {
