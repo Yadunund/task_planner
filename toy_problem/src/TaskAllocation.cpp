@@ -32,6 +32,7 @@ struct RobotState
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
+  double threshold_soc = 0.1;
   static RobotState make(
     std::size_t id_, std::size_t wp_, std::size_t c_wp_)
   {
@@ -60,11 +61,13 @@ public:
     rmf_battery::agv::BatterySystem battery_system,
     std::shared_ptr<rmf_battery::MotionPowerSink> motion_sink,
     std::shared_ptr<rmf_battery::DevicePowerSink> device_sink,
-    std::shared_ptr<rmf_traffic::agv::Planner> planner)
+    std::shared_ptr<rmf_traffic::agv::Planner> planner,
+    bool drain_battery)
   : _battery_system(battery_system),
     _motion_sink(motion_sink),
     _device_sink(device_sink),
-    _planner(planner)
+    _planner(planner),
+    _drain_battery(drain_battery)
   {
     // Do nothing
   }
@@ -73,10 +76,11 @@ public:
     rmf_battery::agv::BatterySystem battery_system,
     std::shared_ptr<rmf_battery::MotionPowerSink> motion_sink,
     std::shared_ptr<rmf_battery::DevicePowerSink> device_sink,
-    std::shared_ptr<rmf_traffic::agv::Planner> planner)
+    std::shared_ptr<rmf_traffic::agv::Planner> planner,
+    bool drain_battery = true)
   {
     return std::make_shared<ChargeBatteryTaskRequest>(
-      battery_system, motion_sink, device_sink, planner);
+      battery_system, motion_sink, device_sink, planner, drain_battery);
   }
 
   std::size_t id() const final
@@ -88,7 +92,10 @@ public:
   {
 
     if (abs(initial_state.battery_soc - _charge_soc) < 1e-3)
+    {
+      std::cout << " -- Charge battery: Battery full" << std::endl;
       return rmf_utils::nullopt;
+    }
 
     rmf_utils::optional<RobotState> state = initial_state;
 
@@ -96,46 +103,65 @@ public:
     state->waypoint = initial_state.charging_waypoint;
     const auto start_time = std::chrono::steady_clock::now() +
       rmf_traffic::time::from_seconds(initial_state.finish_time);
-    rmf_traffic::agv::Planner::Start start{
-      start_time,
-      initial_state.waypoint,
-      0.0};
 
-    rmf_traffic::agv::Planner::Goal goal{initial_state.charging_waypoint};
+    double battery_soc = initial_state.battery_soc;
 
-    const auto result = _planner->setup(start, goal);
-    state->finish_time += result.initial_cost_estimate();
-
-    // TODO: Also deduct charge from robot's trajectory when we switch back to 
-    // computing the robot's plan
-    const double dSOC_device = _device_sink->compute_change_in_charge(
-      result.initial_cost_estimate());
-
-    double battery_soc = initial_state.battery_soc - dSOC_device;
-    if (battery_soc < 0.0)
+    if (initial_state.waypoint != initial_state.charging_waypoint)
     {
-      // If a robot cannot reach its charging dock given its initial battery soc
-      return rmf_utils::nullopt;
+      // Compute plan to charging waypoint along with battery drain
+      rmf_traffic::agv::Planner::Start start{
+        start_time,
+        initial_state.waypoint,
+        0.0};
+
+      rmf_traffic::agv::Planner::Goal goal{initial_state.charging_waypoint};
+
+      const auto result = _planner->plan(start, goal);
+      const auto& trajectory = result->get_itinerary().back().trajectory();
+      const auto& finish_time = *trajectory.finish_time();
+      const double travel_duration = rmf_traffic::time::to_seconds(
+        finish_time - start_time);
+
+      state->finish_time += travel_duration;
+
+      if (_drain_battery)
+      {
+        const double dSOC_motion = _motion_sink->compute_change_in_charge(
+          trajectory);
+        const double dSOC_device = _device_sink->compute_change_in_charge(
+          travel_duration);
+        battery_soc -= dSOC_motion - dSOC_device;
+      }
+
+      if (battery_soc <= state->threshold_soc)
+      {
+        // If a robot cannot reach its charging dock given its initial battery soc
+        std::cout << " -- Charge battery: Unable to reach charger" << std::endl;
+        return rmf_utils::nullopt;
+      }
     }
 
+    // Default _charge_soc = 1.0
     double delta_soc = _charge_soc - battery_soc;
     assert(delta_soc >= 0.0);
     double time_to_charge =
       (3600 * delta_soc * _battery_system.nominal_capacity()) /
-       _battery_system.charging_current();
+      _battery_system.charging_current();
 
     state->finish_time += time_to_charge;
     state->battery_soc = _charge_soc;
     return state;
+
   }
 
 private:
   // fixed id for now
-  std::size_t _id = 42;
+  std::size_t _id = 101;
   rmf_battery::agv::BatterySystem _battery_system;
   std::shared_ptr<rmf_battery::MotionPowerSink> _motion_sink;
   std::shared_ptr<rmf_battery::DevicePowerSink> _device_sink;
   std::shared_ptr<rmf_traffic::agv::Planner> _planner;
+  bool _drain_battery;
   // soc to always charge the battery up to
   double _charge_soc = 1.0;
  
@@ -154,13 +180,15 @@ public:
     std::size_t dropoff,
     std::shared_ptr<MotionPowerSink> motion_sink,
     std::shared_ptr<DevicePowerSink> device_sink,
-    std::shared_ptr<Planner> planner)
+    std::shared_ptr<Planner> planner,
+    bool drain_battery)
   : _id(id),
     _pickup_waypoint(pickup),
     _dropoff_waypoint(dropoff),
     _motion_sink(motion_sink),
     _device_sink(device_sink),
-    _planner(planner)
+    _planner(planner),
+    _drain_battery(drain_battery)
   {
     // Do nothing
   }
@@ -171,10 +199,11 @@ static ConstTaskRequestPtr make(
   std::size_t dropoff,
   std::shared_ptr<MotionPowerSink> motion_sink,
   std::shared_ptr<DevicePowerSink> device_sink,
-  std::shared_ptr<Planner> planner)
+  std::shared_ptr<Planner> planner,
+  bool drain_battery = true)
 {
   return std::make_shared<DeliveryTaskRequest>(
-    id, pickup, dropoff, motion_sink, device_sink, planner);
+    id, pickup, dropoff, motion_sink, device_sink, planner, drain_battery);
 }
 
 std::size_t id() const final
@@ -186,55 +215,88 @@ rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const 
 {
   rmf_utils::optional<RobotState> state = initial_state;
   state->waypoint = _dropoff_waypoint;
-  const auto now = std::chrono::steady_clock::now();
 
-  const auto start_time = now +
+  const auto now = std::chrono::steady_clock::now();
+  auto start_time = now +
     rmf_traffic::time::from_seconds(initial_state.finish_time);
-  Planner::Start start{
+
+  double battery_soc = initial_state.battery_soc;
+  double travel_duration = 0;
+  double dSOC_motion = 0.0;
+  double dSOC_device = 0.0;
+
+  if (initial_state.waypoint != _pickup_waypoint)
+  {
+    // Compute plan to pickup waypoint along with battery drain
+    Planner::Start start{
     start_time,
     initial_state.waypoint,
     0.0};
 
-  Planner::Goal goal{_pickup_waypoint};
-  
-  // First move to waypoint on graph
-  const auto result_to_pickup = _planner->setup(start, goal);
-  const double cost_estimate = result_to_pickup.initial_cost_estimate();
-  state->finish_time += cost_estimate;
+    Planner::Goal goal{_pickup_waypoint};
 
-  // Compute battery drain
-  // TODO drain from robot trajectory
-  double battery_soc = initial_state.battery_soc -
-    _device_sink->compute_change_in_charge(
-      result_to_pickup.initial_cost_estimate());
+    const auto result_to_pickup = _planner->plan(start, goal);
+    // We assume we can always compute a plan
+    const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
+    const auto& finish_time = *trajectory.finish_time();
+    travel_duration = rmf_traffic::time::to_seconds(
+      finish_time - start_time);
 
-  if (battery_soc < 0.0)
-  {
-    return rmf_utils::nullopt;
+    state->finish_time += travel_duration;
+
+    if(_drain_battery)
+    {
+      // Compute battery drain
+      dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
+      dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
+      battery_soc -= dSOC_motion - dSOC_device;
+    }
+
+    if (battery_soc <= state->threshold_soc)
+    {
+      std::cout << " -- Delivery: Unable to reach pickup" << std::endl;
+      return rmf_utils::nullopt;
+    }
+
+    start_time = finish_time;
+
   }
 
-  Planner::Start start_2{
-    rmf_traffic::time::apply_offset(start_time, cost_estimate),
+  Planner::Start start{
+    start_time,
     _pickup_waypoint,
     0.0};
 
-  Planner::Goal goal_2{_dropoff_waypoint};
+  Planner::Goal goal{_dropoff_waypoint};
+  const auto result_to_dropoff = _planner->plan(start, goal);
 
-  const auto result_to_dropoff = _planner->setup(start_2, goal_2);
-  state->finish_time += result_to_dropoff.initial_cost_estimate();
+  const auto trajectory = result_to_dropoff->get_itinerary().back().trajectory();
+  const auto& finish_time = *trajectory.finish_time();
+  travel_duration = rmf_traffic::time::to_seconds(
+    finish_time - start_time);
 
-  // Compute battery drain
-  battery_soc -= _device_sink->compute_change_in_charge(
-    result_to_dropoff.initial_cost_estimate());
+  state->finish_time += travel_duration;
 
-  if (battery_soc < 0.0)
+  if (_drain_battery)
   {
+    // Compute battery drain
+    dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
+    dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
+    battery_soc -= dSOC_motion - dSOC_device;
+  }
+
+  if (battery_soc <= state->threshold_soc)
+  {
+    std::cout << " -- Delivery: Unable to reach dropoff" << std::endl;
     return rmf_utils::nullopt;
   }
   
   state->battery_soc = battery_soc;
 
+  // TODO: Check if we have enough charge to head back to nearest charger
+
   return state;
+
   
 }
 
@@ -245,6 +307,7 @@ private:
   std::shared_ptr<MotionPowerSink> _motion_sink;
   std::shared_ptr<DevicePowerSink> _device_sink;
   std::shared_ptr<Planner> _planner;
+  bool _drain_battery;
 };
 
 // ============================================================================
@@ -552,6 +615,16 @@ public:
                   << std::endl;
         std::cout << "Assignments: " << std::endl;
         print_node(*top);
+        std::cout << "Battery SOC:" << std::endl;
+        for (const auto& agent : top->assigned_tasks)
+        {
+          std::cout << "  Agent: " << agent.first << std::endl;
+          for (const auto& assignment : agent.second)
+          {
+            std::cout << "    " << assignment.task_id << " : " 
+                      << assignment.state.battery_soc << std::endl;
+          }
+        }
         return top;
       }
 
@@ -758,6 +831,7 @@ private:
     }
 
     std::cout << ">" << std::endl;
+    std::cout << "----------------------------------------------" << std::endl;
   }
 
 };
