@@ -1,18 +1,18 @@
 # Grid World
 
-grid_size: 5
-grid_length: 100 # meters
+grid_size: 4
+grid_length: 1500 # meters
 agents:
- - {id: 0, wp: 13, charging_wp: 2 }
- - {id: 1, wp: 2 , charging_wp: 2 }
+ - {id: 1, wp: 13, charging_wp: 13 }
+ - {id: 2, wp: 2 , charging_wp: 2 }
 #  - {id: 3, wp: 21, charging_wp: 2 }
 tasks:
   delivery:
-    - {id: 0, pickup: 0, dropoff: 22}
-    - {id: 1, pickup: 15, dropoff: 3}
-    - {id: 2, pickup: 7, dropoff: 14}
-    - {id: 3, pickup: 17, dropoff: 24}
-    - {id: 4, pickup: 10, dropoff: 9}
+    # - {id: 0, pickup: 0, dropoff: 22}
+    - {id: 1, pickup: 0, dropoff: 3}
+    - {id: 2, pickup: 15, dropoff: 2}
+    - {id: 3, pickup: 7, dropoff: 9}
+    - {id: 4, pickup: 8, dropoff: 11}
     # - {id: 5, pickup: 4, dropoff: 8}
     # - {id: 6, pickup: 8, dropoff: 14}
     # - {id: 8, pickup: 5, dropoff: 11}

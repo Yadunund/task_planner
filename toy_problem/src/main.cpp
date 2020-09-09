@@ -61,12 +61,16 @@ int main(int argc, char* argv[])
 
   rmf_battery::agv::BatterySystem battery_system{24.0, 40.0, 2.0};
   rmf_battery::agv::MechanicalSystem mechanical_system{70.0, 40.0, 0.22};
-  rmf_battery::agv::PowerSystem power_system{"processor", 40.0};
+  rmf_battery::agv::PowerSystem power_system{"processor", 20.0};
 
   std::shared_ptr<SimpleMotionPowerSink> motion_sink =
     std::make_shared<SimpleMotionPowerSink>(battery_system, mechanical_system);
   std::shared_ptr<SimpleDevicePowerSink> device_sink =
     std::make_shared<SimpleDevicePowerSink>(battery_system, power_system);
+
+  const bool drain_battery = true;
+  auto charge_battery_task = ChargeBatteryTaskRequest::make(
+    battery_system, motion_sink, device_sink, planner, drain_battery);
   
   std::vector<RobotState> robot_states;
   std::vector<ConstTaskRequestPtr> tasks;
@@ -75,17 +79,14 @@ int main(int argc, char* argv[])
   {
     robot_states.push_back(
       RobotState::make(agent.id, agent.wp, agent.charging_wp));
-  };
+  }
 
   for (auto tk : cfg.deliveries)
   {
     tasks.push_back(
       DeliveryTaskRequest::make(
-        tk.id, tk.pickup, tk.dropoff, motion_sink, device_sink, planner));
+        tk.id, tk.pickup, tk.dropoff, motion_sink, device_sink, planner, drain_battery));
   };
-
-  auto charge_battery_task = ChargeBatteryTaskRequest::make(
-    battery_system, motion_sink, device_sink, planner);
 
   TaskPlanner task_planner(
     tasks,
