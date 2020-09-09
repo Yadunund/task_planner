@@ -1,3 +1,6 @@
+#ifndef RMF_TASKS__TASK_ALLOCATION_HPP
+#define RMF_TASKS__TASK_ALLOCATION_HPP
+
 #include <rmf_traffic/agv/Graph.hpp>
 #include <rmf_traffic/Trajectory.hpp>
 #include <rmf_traffic/Time.hpp>
@@ -763,3 +766,5 @@ private:
 };
 
 } // anonymous namespace
+
+#endif // RMF_TASKS__TASK_ALLOCATION_HPP

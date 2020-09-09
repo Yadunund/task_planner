@@ -1,87 +1,5 @@
 #include "TaskAllocation.cpp"
-#include "yaml-cpp/yaml.h"
-#include <iostream>
-#include <fstream>
-
-class TaskConfig
-{
-  public:
-    struct Agent
-    {
-      std::size_t id;
-      std::size_t wp;
-      std::size_t charging_wp;
-    };
-    
-    struct DeliveryTask
-    {
-      std::size_t id;
-      std::size_t pickup;
-      std::size_t dropoff;
-    };
-
-    double edge_length;
-    int grid_size;
-    std::vector<DeliveryTask> deliveries;
-    std::vector<Agent> agents;
-};
-
-TaskConfig load_task_config(const std::string& yaml_path)
-{
-  YAML::Node yaml_config = YAML::LoadFile(yaml_path);
-  TaskConfig config;
-  config.grid_size = yaml_config["grid_size"].as<int>();
-  config.edge_length = yaml_config["grid_length"].as<double>();
-
-  for ( auto task : yaml_config["tasks"]["delivery"])
-  {
-    TaskConfig::DeliveryTask delivery = {
-      task["id"].as<std::size_t>(),
-      task["pickup"].as<std::size_t>(),
-      task["dropoff"].as<std::size_t>()
-    };   
-    config.deliveries.push_back(delivery);
-  }
-
-  for ( auto ag: yaml_config["agents"])
-  {
-    TaskConfig::Agent agent = {
-      ag["id"].as<std::size_t>(),
-      ag["wp"].as<std::size_t>(),
-      ag["charging_wp"].as<std::size_t>()
-    };   
-    config.agents.push_back(agent);
-  }
-  return config;
-}
-
-void output_allocation_config(
-  const std::string& yaml_path,
-  const AssignedTasks& allocations )
-{
-  // allocations
-  
-  auto it = allocations.begin();
-
-  YAML::Emitter out;
-  out << YAML::Value << YAML::BeginSeq;
-  while(it != allocations.end())
-  {
-    out << YAML::BeginMap;
-    out << YAML::Key << "agent_id" << YAML::Value << it->first;
-    out << YAML::Key << "tasks";
-    out << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for( auto assignment : it->second)
-      out << assignment.task_id;
-    out << YAML::EndSeq << YAML::EndMap;
-    it++;
-  }
-  out << YAML::EndSeq;
-
-  std::ofstream fout(yaml_path);
-  fout << out.c_str();
-  fout.close();
-}
+#include "ParseTasks.cpp"
 
 //=========================================================================
 
@@ -98,9 +16,9 @@ int main(int argc, char* argv[])
   }
 
   // load yaml file
-  std::string task_config(argv[argc-2]);
-  std::string allocation_config(argv[argc-1]);
-  TaskConfig cfg = load_task_config(task_config);
+  std::string task_config(argv[1]);
+  std::string allocation_config(argv[2]);
+  TaskConfig cfg = read_task_config(task_config);
   
   rmf_traffic::agv::Graph graph;
   auto add_bidir_lane = [&](const std::size_t w0, const std::size_t w1)
@@ -184,7 +102,7 @@ int main(int argc, char* argv[])
     end_time - begin_time);
 
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
-  output_allocation_config(allocation_config, solution->assigned_tasks);
+  write_allocation_config(allocation_config, solution->assigned_tasks);
   
   if (!solution)
   {
