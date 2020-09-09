@@ -9,7 +9,7 @@ git clone https://github.com/Yadunund/task_planner.git
 git clone https://github.com/osrf/rmf_core.git -b feature/battery_planning
 
 cd ~/ws_task_planner
-colcon build --packages-up-to toy_problem
+colcon build --packages-up-to toy_problem --cmake-args -DCMAKE_BUILD_TYPE=RELEASE
 ```
 
 ## Run

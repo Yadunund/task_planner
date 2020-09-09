@@ -103,11 +103,10 @@ int main(int argc, char* argv[])
     end_time - begin_time);
 
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
-  write_allocation_config(allocation_config, solution->assigned_tasks);
-  
   if (!solution)
   {
     std::cout << "No solution found!" << std::endl;
     return 0;
   }
+  write_allocation_config(allocation_config, solution->assigned_tasks);
 }
