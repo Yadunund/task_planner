@@ -19,6 +19,7 @@ find_package(rmf_traffic REQUIRED)
 find_package(rmf_battery)
 find_package(rmf_utils REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_executable(toy_problem
   src/main.cpp
@@ -26,6 +27,7 @@ add_executable(toy_problem
 
 target_link_libraries(toy_problem
   PUBLIC
+    yaml-cpp
     rmf_battery::rmf_battery
 )
 

@@ -13,6 +13,18 @@ colcon build --packages-up-to toy_problem
 ```
 
 ## Run
+1) Run Toy Problem:
+```bash
+# ./toy_problem {INPUT_TASKS_YAML} {OUTPUT_ALLOCATION_YAML}
+./build/toy_problem/toy_problem src/task_planner/scripts/task_config.yaml \
+src/task_planner/scripts/allocation.yaml
 ```
-./build/top_problem/toy_problem
+You will notice `allocation.yaml` is populated with the new task allocation.
+
+
+2) Visualize Task Allocation
+```bash
+cd task_planner/scripts
+# Make sure "alocation.yaml" and "task_config.yaml" are located in /scripts
+python3 task_allocation_viz.py 
 ```
