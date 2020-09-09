@@ -1,5 +1,7 @@
 #include "TaskAllocation.cpp"
 #include "yaml-cpp/yaml.h"
+#include <iostream>
+#include <fstream>
 
 class TaskConfig
 {
@@ -53,12 +55,48 @@ TaskConfig load_task_config(const std::string& yaml_path)
   return config;
 }
 
+void output_allocation_config(
+  const std::string& yaml_path,
+  const AssignedTasks& allocations )
+{
+  // allocations
+  
+  auto it = allocations.begin();
+
+  YAML::Emitter out;
+  out << YAML::Value << YAML::BeginSeq;
+  while(it != allocations.end())
+  {
+    out << YAML::BeginMap;
+    out << YAML::Key << "agent_id" << YAML::Value << it->first;
+    out << YAML::Key << "tasks";
+    out << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for( auto assignment : it->second)
+      out << assignment.task_id;
+    out << YAML::EndSeq << YAML::EndMap;
+    it++;
+  }
+  out << YAML::EndSeq;
+
+  std::ofstream fout(yaml_path);
+  fout << out.c_str();
+  fout.close();
+}
+
 //=========================================================================
 
 int main(int argc, char* argv[])
 { 
+  if (argc < 3)
+  {
+    std::cerr<< " Incorrect number of args, input format: \n"
+             << " \t ./toy_problem {INPUT_YAML} {OUTPUT_YAML}" << std::endl;
+    return 0;
+  }
+
   // load yaml file
-  std::string task_config(argv[argc-1]);
+  std::string task_config(argv[argc-2]);
+  std::string allocation_config(argv[argc-1]);
   TaskConfig cfg = load_task_config(task_config);
   
   rmf_traffic::agv::Graph graph;
@@ -134,7 +172,9 @@ int main(int argc, char* argv[])
   const auto end_time = std::chrono::steady_clock::now();
   const double time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
+
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
+  output_allocation_config(allocation_config, solution->assigned_tasks);
   
   if (!solution)
   {
