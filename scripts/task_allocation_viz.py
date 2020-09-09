@@ -11,8 +11,6 @@ import random
 import yaml
 
 ################################################################################
-# NOT BEING USED NOW
-
 
 class RequestTask:
   class Profile:
@@ -173,5 +171,5 @@ def allocate_tasks(agents, tasks, allocation_path):
 if __name__ == '__main__':
   agents, tasks, graph = load_task_yaml("task_config.yaml")
   agents = allocate_tasks(agents, tasks, "allocation.yaml")
-  # agents = calculate_cost(agents);
+  # agents = calculate_cost(agents); # todo
   plot_task_allocation(agents, graph)
