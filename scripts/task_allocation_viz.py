@@ -159,7 +159,7 @@ def allocate_tasks(agents, tasks, allocation_path):
   with open(allocation_path, 'r') as stream:
     allocation_config = yaml.safe_load(stream)
     for allocation in allocation_config:
-      agt_id = allocation["id"]
+      agt_id = allocation["agent_id"]
       for task_id in allocation["tasks"]:
         agents[agt_id].assign_task(tasks[task_id])
       print(" Allocated {} tasks to agent {}".format(

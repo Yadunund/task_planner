@@ -1,4 +1,4 @@
-- id: 5
+- agent_id: 1
   tasks: [4, 2, 3]
-- id: 4
+- agent_id: 0
   tasks: [1, 0]
