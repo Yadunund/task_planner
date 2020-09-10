@@ -30,16 +30,15 @@ namespace {
 // ============================================================================
 struct RobotState
 {
-  std::size_t id;
   std::size_t waypoint;
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
   double threshold_soc = 0.1;
   static RobotState make(
-    std::size_t id_, std::size_t wp_, std::size_t c_wp_)
+    std::size_t wp_, std::size_t c_wp_)
   {
-    return RobotState{id_, wp_, c_wp_};
+    return RobotState{wp_, c_wp_};
   }
 };
 
@@ -318,8 +317,14 @@ class Candidates
 {
 public:
 
-  // Map finish time to RobotState
-  using Map = std::multimap<double, RobotState>;
+  struct Entry
+  {
+    std::size_t candidate;
+    RobotState state;
+  };
+
+  // Map finish time to Entry
+  using Map = std::multimap<double, Entry>;
 
   static Candidates make(
       const std::vector<RobotState>& initial_states,
@@ -369,21 +374,18 @@ public:
     return _value_map.begin()->first;
   }
 
-  void update_candidate(RobotState state)
+  void update_candidate(std::size_t candidate, RobotState state)
   {
-    Map::iterator erase_it;
-    for (auto it = _value_map.begin(); it != _value_map.end(); ++it)
-      if (it->second.id == state.id)
-        erase_it = it;
-    _value_map.erase(erase_it);
-    _candidate_map[state.id] = _value_map.insert(
-      {state.finish_time, state});
+    const auto it = _candidate_map.at(candidate);
+    _value_map.erase(it);
+    _candidate_map[candidate] = _value_map.insert(
+      {state.finish_time, Entry{candidate, state}});
   }
 
 
 private:
   Map _value_map;
-  std::map<std::size_t, Map::iterator> _candidate_map;
+  std::vector<Map::iterator> _candidate_map;
 
   Candidates(Map candidate_values)
     : _value_map(std::move(candidate_values))
@@ -395,8 +397,11 @@ private:
   {
     for (auto it = _value_map.begin(); it != _value_map.end(); ++it)
     {
-      const auto id = it->second.id;
-      _candidate_map[id] = it;
+      const auto c = it->second.candidate;
+      if (_candidate_map.size() <= c)
+        _candidate_map.resize(c+1);
+
+      _candidate_map[c] = it;
     }
   }
 };
@@ -406,12 +411,13 @@ Candidates Candidates::make(
     const TaskRequest& request)
 {
   Map initial_map;
-  for (const auto& state : initial_states)
+  for (std::size_t i = 0; i < initial_states.size(); ++i)
   {
+    const auto& state = initial_states[i];
     const auto finish = request.estimate(state);
     if (finish.has_value())
     {
-      initial_map.insert({finish->finish_time, finish.value()});
+      initial_map.insert({finish->finish_time, Entry{i, finish.value()}});
     }
   }
 
@@ -442,7 +448,7 @@ struct Assignment
 };
 
 using AssignedTasks =
-  std::unordered_map<std::size_t, std::vector<Assignment>>;
+  std::vector<std::vector<Assignment>>;
 using UnassignedTasks =
   std::unordered_map<std::size_t, PendingTask>;
 
@@ -498,7 +504,7 @@ private:
 
 bool Filter::ignore(const Node& node)
 {
-  if (_passthrough)
+if (_passthrough)
     return false;
 
   bool new_node = false;
@@ -506,16 +512,16 @@ bool Filter::ignore(const Node& node)
   // TODO(MXG): Consider replacing this tree structure with a hash set
 
   AgentTable* agent_table = &_root;
-  auto a = node.assigned_tasks.begin();
+  std::size_t a = 0;
   std::size_t t = 0;
-  while(a != node.assigned_tasks.end())
+  while(a < node.assigned_tasks.size())
   {
-    const auto& current_agent = a->second;
+    const auto& current_agent = node.assigned_tasks.at(a);
 
     if (t < current_agent.size())
     {
       const auto& task_id = current_agent[t].task_id;
-      const auto agent_insertion = agent_table->agent.insert({a->first, nullptr});
+      const auto agent_insertion = agent_table->agent.insert({a, nullptr});
       if (agent_insertion.second)
         agent_insertion.first->second = std::make_unique<TaskTable>();
 
@@ -559,18 +565,13 @@ public:
     const bool debug)
   : _charge_battery(charge_battery),
     _use_filter(use_filter),
-    _debug(debug)
+    _debug(debug),
+    _initial_states(initial_states)
   {
 
-    // Store initial_states into a map
-    for (const auto& state : initial_states)
-    {
-      _initial_states.insert({state.id, state});
-    }
     // Initialize the starting node and add it to the priority queue
     auto starting_node = std::make_shared<Node>();
-    for (const auto& state : initial_states)
-      starting_node->assigned_tasks[state.id] = {};
+    starting_node->assigned_tasks.resize(initial_states.size());
 
     for (const auto& task : tasks)
       starting_node->unassigned_tasks.insert(
@@ -619,10 +620,10 @@ public:
         std::cout << "Assignments: " << std::endl;
         print_node(*top);
         std::cout << "Battery SOC:" << std::endl;
-        for (const auto& agent : top->assigned_tasks)
+        for (std::size_t i = 0; i < top->assigned_tasks.size(); ++i)
         {
-          std::cout << "  Agent: " << agent.first << std::endl;
-          for (const auto& assignment : agent.second)
+          std::cout << "  Agent: " << i << std::endl;
+          for (const auto& assignment : top->assigned_tasks[i])
           {
             std::cout << "    " << assignment.task_id << " : " 
                       << assignment.state.battery_soc << std::endl;
@@ -649,21 +650,20 @@ private:
   std::size_t _total_queue_entries = 0;
   std::size_t _total_queue_expansions = 0;
 
-  std::unordered_map<std::size_t, RobotState> _initial_states;
   ConstTaskRequestPtr _charge_battery;
 
   bool _use_filter;
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
-
+  std::vector<RobotState> _initial_states;
 
   double compute_g(const Node& node)
   {
     double cost = 0.0;
     for (const auto& agent : node.assigned_tasks)
     {
-      for (const auto& assignment : agent.second)
+      for (const auto& assignment : agent)
       {
         cost += assignment.state.finish_time;
       }
@@ -691,17 +691,18 @@ private:
   std::vector<ConstNodePtr> expand(ConstNodePtr parent, Filter& filter)
   {
     std::vector<ConstNodePtr> new_nodes;
-    
+    new_nodes.reserve(
+      parent->unassigned_tasks.size() + parent->assigned_tasks.size());
     for (const auto& u : parent->unassigned_tasks)
     {
       const auto& range = u.second.candidates.best_candidates();
       for (auto it = range.begin; it!= range.end; it++)
       {
         auto new_node = std::make_shared<Node>(*parent);
-        const auto& state = it->second;
+        const auto& entry = it->second;
         // Assign the unassigned task
-        new_node->assigned_tasks[state.id].push_back(
-          Assignment{u.first, state});
+        new_node->assigned_tasks[entry.candidate].push_back(
+          Assignment{u.first, entry.state});
         
         // Erase the assigned task from unassigned tasks
         new_node->unassigned_tasks.erase(u.first);
@@ -710,11 +711,11 @@ private:
         bool discard = false;
         for (auto& new_u : new_node->unassigned_tasks)
         {
-          const auto finish = new_u.second.request->estimate(state);
+          const auto finish = new_u.second.request->estimate(entry.state);
           if (finish.has_value())
           {
             new_u.second.candidates.update_candidate(
-              finish.value());
+              entry.candidate, finish.value());
           }
           else
           {
@@ -743,29 +744,29 @@ private:
       }
     }
 
-    // TODO Assign charging task to each robot
-    for (auto agent : parent->assigned_tasks)
+    // Assign charging task to each robot
+    for (std::size_t i = 0; i < parent->assigned_tasks.size(); ++i)
     {
       auto new_node = std::make_shared<Node>(*parent);
       // Assign charging task to an agent
       auto charging_task = _charge_battery;
-      const auto assignments = new_node->assigned_tasks[agent.first];
+      const auto& assignments = new_node->assigned_tasks[i];
       RobotState state;
       if (assignments.size() > 0)
       {
-        const auto& last_assignment = new_node->assigned_tasks[agent.first].back();
+        const auto& last_assignment = assignments.back();
         state = last_assignment.state;
       }
       else
       {
         // We use the initial state of the robot
-        state = _initial_states[agent.first];
+        state = _initial_states[i];
       }
 
       bool discard = false;
       auto new_state = charging_task->estimate(state);
       if (new_state.has_value())
-        new_node->assigned_tasks[agent.first].push_back(
+        new_node->assigned_tasks[i].push_back(
           Assignment{charging_task->id(), new_state.value()});
       else
       {
@@ -780,7 +781,7 @@ private:
         if (finish.has_value())
         {
           new_u.second.candidates.update_candidate(
-            finish.value());
+            i, finish.value());
         }
         else
         {
@@ -804,22 +805,19 @@ private:
   void print_node(const Node& node)
   {
     std::cout << " -- " << node.cost_estimate << ": <";
-    bool first = true;
-    for (const auto& agent : node.assigned_tasks)
+    for (std::size_t a=0; a < node.assigned_tasks.size(); ++a)
     {
-      if (first)
-        first = false;
-      else
+      if (a > 0)
         std::cout << ", ";
 
-      std::cout << agent.first << ": [";
-      for (const auto i : agent.second)
+      std::cout << a << ": [";
+      for (const auto i : node.assigned_tasks[a])
         std::cout << " " << i.task_id;
       std::cout << " ]";
     }
 
     std::cout << " -- ";
-    first = true;
+    bool first = true;
     for (const auto& u : node.unassigned_tasks)
     {
       if (first)
@@ -830,7 +828,7 @@ private:
       std::cout << u.first << ":";
       const auto& range = u.second.candidates.best_candidates();
       for (auto it = range.begin; it != range.end; ++it)
-        std::cout << " " << it->second.id;
+        std::cout << " " << it->second.candidate;
     }
 
     std::cout << ">" << std::endl;

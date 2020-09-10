@@ -78,7 +78,7 @@ int main(int argc, char* argv[])
   for (auto agent : cfg.agents)
   {
     robot_states.push_back(
-      RobotState::make(agent.id, agent.wp, agent.charging_wp));
+      RobotState::make(agent.wp, agent.charging_wp));
   }
 
   for (auto tk : cfg.deliveries)

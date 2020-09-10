@@ -70,20 +70,18 @@ void write_allocation_config(
 {
   // allocations
   
-  auto it = allocations.begin();
 
   YAML::Emitter out;
   out << YAML::Value << YAML::BeginSeq;
-  while(it != allocations.end())
+  for(std::size_t i = 0; i < allocations.size(); ++i)
   {
     out << YAML::BeginMap;
-    out << YAML::Key << "agent_id" << YAML::Value << it->first;
+    out << YAML::Key << "agent_id" << YAML::Value << i;
     out << YAML::Key << "tasks";
     out << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for( auto assignment : it->second)
+    for( auto assignment : allocations[i])
       out << assignment.task_id;
     out << YAML::EndSeq << YAML::EndMap;
-    it++;
   }
   out << YAML::EndSeq;
 
