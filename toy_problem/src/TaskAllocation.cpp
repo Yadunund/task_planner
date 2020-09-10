@@ -928,7 +928,6 @@ private:
       auto new_state = charging_task->estimate(state);
       if (new_state.has_value())
       {
-        assert(false);
         new_node->assigned_tasks[i].push_back(
           Assignment{charging_task->id(), new_state.value()});
       }
