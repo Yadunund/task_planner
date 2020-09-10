@@ -25,6 +25,9 @@
 #include <iostream>
 #include <limits>
 #include <cstdlib>
+#include <cassert>
+#include <set>
+#include <algorithm>
 
 namespace {
 // ============================================================================
@@ -34,11 +37,26 @@ struct RobotState
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
-  double threshold_soc = 0.1;
+  double threshold_soc = 0.2;
   static RobotState make(
     std::size_t wp_, std::size_t c_wp_)
   {
     return RobotState{wp_, c_wp_};
+  }
+};
+
+// ============================================================================
+struct Invariant
+{
+  std::size_t task_id;
+  double invariant_cost;
+};
+
+struct InvariantLess
+{
+  bool operator()(const Invariant& a, const Invariant& b) const
+  {
+    return a.invariant_cost < b.invariant_cost;
   }
 };
 
@@ -48,8 +66,11 @@ class TaskRequest
 public:
 
   virtual std::size_t id() const = 0;
+
   virtual rmf_utils::optional<RobotState> estimate(
     const RobotState& initial_state) const = 0;
+
+  virtual double invariant_duration() const = 0;
 
 };
 
@@ -71,7 +92,7 @@ public:
     _planner(planner),
     _drain_battery(drain_battery)
   {
-    // Do nothing
+    _invariant_duration = 0.0;
   }
 
   static ConstTaskRequestPtr make(
@@ -156,6 +177,11 @@ public:
 
   }
 
+  double invariant_duration() const final
+  {
+    return _invariant_duration;
+  }
+
 private:
   // fixed id for now
   std::size_t _id = 101;
@@ -166,6 +192,7 @@ private:
   bool _drain_battery;
   // soc to always charge the battery up to
   double _charge_soc = 1.0;
+  double _invariant_duration;
  
 };
 
@@ -192,115 +219,121 @@ public:
     _planner(planner),
     _drain_battery(drain_battery)
   {
-    // Do nothing
-  }
-
-static ConstTaskRequestPtr make(
-  std::size_t id,
-  std::size_t pickup,
-  std::size_t dropoff,
-  std::shared_ptr<MotionPowerSink> motion_sink,
-  std::shared_ptr<DevicePowerSink> device_sink,
-  std::shared_ptr<Planner> planner,
-  bool drain_battery = true)
-{
-  return std::make_shared<DeliveryTaskRequest>(
-    id, pickup, dropoff, motion_sink, device_sink, planner, drain_battery);
-}
-
-std::size_t id() const final
-{
-  return _id;
-}
-
-rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const final
-{
-  rmf_utils::optional<RobotState> state = initial_state;
-  state->waypoint = _dropoff_waypoint;
-
-  const auto now = std::chrono::steady_clock::now();
-  auto start_time = now +
-    rmf_traffic::time::from_seconds(initial_state.finish_time);
-
-  double battery_soc = initial_state.battery_soc;
-  double travel_duration = 0;
-  double dSOC_motion = 0.0;
-  double dSOC_device = 0.0;
-
-  if (initial_state.waypoint != _pickup_waypoint)
-  {
-    // Compute plan to pickup waypoint along with battery drain
+    const auto start_time = std::chrono::steady_clock::now();
     Planner::Start start{
-    start_time,
-    initial_state.waypoint,
-    0.0};
+      start_time,
+      _pickup_waypoint,
+      0.0};
 
-    Planner::Goal goal{_pickup_waypoint};
+    Planner::Goal goal{_dropoff_waypoint};
+    const auto result_to_dropoff = _planner->plan(start, goal);
 
-    const auto result_to_pickup = _planner->plan(start, goal);
-    // We assume we can always compute a plan
-    const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
+    const auto trajectory = result_to_dropoff->get_itinerary().back().trajectory();
     const auto& finish_time = *trajectory.finish_time();
-    travel_duration = rmf_traffic::time::to_seconds(
+    _invariant_duration = rmf_traffic::time::to_seconds(
       finish_time - start_time);
 
-    state->finish_time += travel_duration;
+    _invariant_battery_drain = 0.0;
 
-    if(_drain_battery)
+    if (_drain_battery)
     {
       // Compute battery drain
-      dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
-      dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
-      battery_soc -= dSOC_motion - dSOC_device;
+      const double dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
+      const double dSOC_device = _device_sink->compute_change_in_charge(_invariant_duration);
+      _invariant_battery_drain = dSOC_motion + dSOC_device;
     }
+    
+  }
+
+  static ConstTaskRequestPtr make(
+    std::size_t id,
+    std::size_t pickup,
+    std::size_t dropoff,
+    std::shared_ptr<MotionPowerSink> motion_sink,
+    std::shared_ptr<DevicePowerSink> device_sink,
+    std::shared_ptr<Planner> planner,
+    bool drain_battery = true)
+  {
+    return std::make_shared<DeliveryTaskRequest>(
+      id, pickup, dropoff, motion_sink, device_sink, planner, drain_battery);
+  }
+
+  std::size_t id() const final
+  {
+    return _id;
+  }
+
+  rmf_utils::optional<RobotState> estimate(const RobotState& initial_state) const final
+  {
+    rmf_utils::optional<RobotState> state = initial_state;
+    state->waypoint = _dropoff_waypoint;
+
+    const auto now = std::chrono::steady_clock::now();
+    auto start_time = now +
+      rmf_traffic::time::from_seconds(initial_state.finish_time);
+
+    double battery_soc = initial_state.battery_soc;
+    double travel_duration = 0;
+    double dSOC_motion = 0.0;
+    double dSOC_device = 0.0;
+
+    if (initial_state.waypoint != _pickup_waypoint)
+    {
+      // Compute plan to pickup waypoint along with battery drain
+      Planner::Start start{
+      start_time,
+      initial_state.waypoint,
+      0.0};
+
+      Planner::Goal goal{_pickup_waypoint};
+
+      const auto result_to_pickup = _planner->plan(start, goal);
+      // We assume we can always compute a plan
+      const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
+      const auto& finish_time = *trajectory.finish_time();
+      travel_duration = rmf_traffic::time::to_seconds(
+        finish_time - start_time);
+
+      state->finish_time += travel_duration;
+
+      if(_drain_battery)
+      {
+        // Compute battery drain
+        dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
+        dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
+        battery_soc -= dSOC_motion - dSOC_device;
+      }
+
+      if (battery_soc <= state->threshold_soc)
+      {
+        std::cout << " -- Delivery: Unable to reach pickup" << std::endl;
+        return rmf_utils::nullopt;
+      }
+
+      start_time = finish_time;
+    }
+
+    // Factor in invariants
+    state->finish_time += _invariant_duration;
+    battery_soc -= _invariant_battery_drain;
 
     if (battery_soc <= state->threshold_soc)
     {
-      std::cout << " -- Delivery: Unable to reach pickup" << std::endl;
+      std::cout << " -- Delivery: Unable to reach dropoff" << std::endl;
       return rmf_utils::nullopt;
     }
+    
+    state->battery_soc = battery_soc;
 
-    start_time = finish_time;
+    // TODO: Check if we have enough charge to head back to nearest charger
 
+    return state;
   }
 
-  Planner::Start start{
-    start_time,
-    _pickup_waypoint,
-    0.0};
-
-  Planner::Goal goal{_dropoff_waypoint};
-  const auto result_to_dropoff = _planner->plan(start, goal);
-
-  const auto trajectory = result_to_dropoff->get_itinerary().back().trajectory();
-  const auto& finish_time = *trajectory.finish_time();
-  travel_duration = rmf_traffic::time::to_seconds(
-    finish_time - start_time);
-
-  state->finish_time += travel_duration;
-
-  if (_drain_battery)
+  double invariant_duration() const final
   {
-    // Compute battery drain
-    dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
-    dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
-    battery_soc -= dSOC_motion - dSOC_device;
+    return _invariant_duration;
   }
-
-  if (battery_soc <= state->threshold_soc)
-  {
-    std::cout << " -- Delivery: Unable to reach dropoff" << std::endl;
-    return rmf_utils::nullopt;
-  }
-  
-  state->battery_soc = battery_soc;
-
-  // TODO: Check if we have enough charge to head back to nearest charger
-
-  return state;
-
-  
-}
 
 private:
   std::size_t _id; // task id
@@ -310,6 +343,8 @@ private:
   std::shared_ptr<DevicePowerSink> _device_sink;
   std::shared_ptr<Planner> _planner;
   bool _drain_battery;
+  double _invariant_duration;
+  double _invariant_battery_drain;
 };
 
 // ============================================================================
@@ -451,13 +486,42 @@ using AssignedTasks =
   std::vector<std::vector<Assignment>>;
 using UnassignedTasks =
   std::unordered_map<std::size_t, PendingTask>;
-
+using InvariantSet = std::multiset<Invariant, InvariantLess>;
 // ============================================================================
 struct Node
 {
   AssignedTasks assigned_tasks;
   UnassignedTasks unassigned_tasks;
   double cost_estimate;
+  InvariantSet unassigned_invariants;
+
+  void sort_invariants()
+  {
+    unassigned_invariants.clear();
+    for (const auto& u : unassigned_tasks)
+    {
+      unassigned_invariants.insert(
+            Invariant{u.first, u.second.request->invariant_duration()});
+    }
+  }
+
+  void pop_unassigned(std::size_t task_id)
+  {
+    unassigned_tasks.erase(task_id);
+
+    bool popped_invariant = false;
+    for (auto it = unassigned_invariants.begin();
+         it != unassigned_invariants.end(); ++it)
+    {
+      if (it->task_id == task_id)
+      {
+        popped_invariant = true;
+        unassigned_invariants.erase(it);
+      }
+    }
+
+    assert(popped_invariant);
+  }
 };
 
 using NodePtr = std::shared_ptr<Node>;
@@ -469,6 +533,62 @@ struct LowestCostEstimate
   {
     return b->cost_estimate < a->cost_estimate;
   }
+};
+
+// ============================================================================
+class InvariantHeuristicQueue
+{
+public:
+
+  InvariantHeuristicQueue(std::vector<double> initial_values)
+  {
+    assert(!initial_values.empty());
+    std::sort(initial_values.begin(), initial_values.end());
+
+    for (const auto value : initial_values)
+      _stacks.push_back({value});
+  }
+
+  void add(double new_value)
+  {
+    // Add the new value to the smallest stack
+    const double value = _stacks[0].back() + new_value;
+    _stacks[0].push_back(value);
+
+    // Find the largest stack that is still smaller than the current front
+    const auto next_it = _stacks.begin() + 1;
+    auto end_it = next_it;
+    for (; end_it != _stacks.end(); ++end_it)
+    {
+      if (value <= end_it->back())
+        break;
+    }
+
+    if (next_it != end_it)
+    {
+      // Rotate the vector elements to move the front stack to its new place
+      // in the order
+      std::rotate(_stacks.begin(), next_it, end_it);
+    }
+  }
+
+  double compute_cost() const
+  {
+    double total_cost = 0.0;
+    for (const auto& stack : _stacks)
+    {
+      // NOTE: We start iterating from i=1 because i=0 represents a component of
+      // the cost that is already accounted for by g(n) and the variant
+      // component of h(n)
+      for (std::size_t i=1; i < stack.size(); ++i)
+        total_cost += stack[i];
+    }
+
+    return total_cost;
+  }
+
+private:
+  std::vector<std::vector<double>> _stacks;
 };
 
 // ============================================================================
@@ -578,6 +698,8 @@ public:
         {task->id(), PendingTask(initial_states, task)});
 
     starting_node->cost_estimate = compute_f(*starting_node);
+    starting_node->sort_invariants();
+
     _priority_queue.push(starting_node);
     _total_queue_entries++;
 
@@ -674,13 +796,52 @@ private:
 
   double compute_h(const Node& node)
   {
-    double cost = 0.0;
+    std::vector<double> initial_queue_values;
+    initial_queue_values.resize(
+          node.assigned_tasks.size(), std::numeric_limits<double>::infinity());
+
     for (const auto& u : node.unassigned_tasks)
     {
-      cost += u.second.candidates.best_finish_time();
+      // We subtract the invariant duration here because otherwise its
+      // contribution to the cost estimate will be duplicated in the next section,
+      // which could result in an overestimate.
+      const double variant_value =
+          u.second.candidates.best_finish_time()
+          - u.second.request->invariant_duration();
+
+      const auto& range = u.second.candidates.best_candidates();
+      for (auto it = range.begin; it != range.end; ++it)
+      {
+        const std::size_t candidate = it->second.candidate;
+        if (variant_value < initial_queue_values[candidate])
+          initial_queue_values[candidate] = variant_value;
+      }
     }
-    
-    return cost;
+
+    for (std::size_t i=0; i < initial_queue_values.size(); ++i)
+    {
+      auto& value = initial_queue_values[i];
+      if (std::isinf(value))
+      {
+        // Clear out any infinity placeholders. Those candidates simply don't have
+        // any unassigned tasks that want to use it.
+        const auto& assignments = node.assigned_tasks[i];
+        if (assignments.empty())
+          value = 0.0;
+        else
+          value = assignments.back().state.finish_time;
+      }
+    }
+
+    InvariantHeuristicQueue queue(std::move(initial_queue_values));
+    // NOTE: It is crucial that we use the ordered set of unassigned_invariants
+    // here. The InvariantHeuristicQueue expects the invariant costs to be passed
+    // to it in order of smallest to largest. If that assumption is not met, then
+    // the final cost that's calculated may be invalid.
+    for (const auto& u : node.unassigned_invariants)
+      queue.add(u.invariant_cost);
+
+    return queue.compute_cost();
   }
 
   double compute_f(const Node& n)
@@ -705,7 +866,7 @@ private:
           Assignment{u.first, entry.state});
         
         // Erase the assigned task from unassigned tasks
-        new_node->unassigned_tasks.erase(u.first);
+        new_node->pop_unassigned(u.first);
 
         // Update states of unassigned tasks for the candidate
         bool discard = false;
@@ -774,7 +935,6 @@ private:
       }
       
       // Update unassigned tasks
-
       for (auto& new_u : new_node->unassigned_tasks)
       {
         const auto finish = new_u.second.request->estimate(state);
