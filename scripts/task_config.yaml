@@ -1,7 +1,7 @@
 # Grid World
 
 grid_size: 4
-grid_length: 1000 # meters
+grid_length: 800 # meters
 agents:
  - {id: 1, wp: 13, charging_wp: 13 }
  - {id: 2, wp: 2 , charging_wp: 2 }

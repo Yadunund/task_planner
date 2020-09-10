@@ -37,7 +37,7 @@ struct RobotState
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
-  double threshold_soc = 0.2;
+  double threshold_soc = 0.25;
   static RobotState make(
     std::size_t wp_, std::size_t c_wp_)
   {
@@ -153,7 +153,7 @@ public:
           trajectory);
         const double dSOC_device = _device_sink->compute_change_in_charge(
           travel_duration);
-        battery_soc -= dSOC_motion - dSOC_device;
+        battery_soc = battery_soc - dSOC_motion - dSOC_device;
       }
 
       if (battery_soc <= state->threshold_soc)
@@ -301,7 +301,7 @@ public:
         // Compute battery drain
         dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
         dSOC_device = _device_sink->compute_change_in_charge(travel_duration);
-        battery_soc -= dSOC_motion - dSOC_device;
+        battery_soc = battery_soc - dSOC_motion - dSOC_device;
       }
 
       if (battery_soc <= state->threshold_soc)
@@ -927,8 +927,11 @@ private:
       bool discard = false;
       auto new_state = charging_task->estimate(state);
       if (new_state.has_value())
+      {
+        assert(false);
         new_node->assigned_tasks[i].push_back(
           Assignment{charging_task->id(), new_state.value()});
+      }
       else
       {
         continue;
