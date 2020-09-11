@@ -1,5 +1,5 @@
-#include "TaskAllocation.cpp"
-#include "ParseTasks.cpp"
+#include "TaskAllocation.hpp"
+#include "ParseTasks.hpp"
 
 //=========================================================================
 
