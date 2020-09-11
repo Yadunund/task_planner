@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <map>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <cstdlib>
 #include <cassert>
@@ -37,7 +38,7 @@ struct RobotState
   std::size_t charging_waypoint;
   double finish_time = 0.0;
   double battery_soc = 1.0;
-  double threshold_soc = 0.25;
+  double threshold_soc = 0.20;
   static RobotState make(
     std::size_t wp_, std::size_t c_wp_)
   {
@@ -747,8 +748,10 @@ public:
           std::cout << "  Agent: " << i << std::endl;
           for (const auto& assignment : top->assigned_tasks[i])
           {
-            std::cout << "    " << assignment.task_id << " : " 
-                      << assignment.state.battery_soc << std::endl;
+            std::cout << std::setprecision(4) << "    " << assignment.task_id 
+                      << " : " << 100 * assignment.state.battery_soc 
+                      << "% at time " << assignment.state.finish_time << "s" 
+                      << std::endl;
           }
         }
         return top;

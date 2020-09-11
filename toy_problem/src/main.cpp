@@ -59,7 +59,7 @@ int main(int argc, char* argv[])
       rmf_traffic::agv::Planner::Configuration{graph, traits},
       default_options);
 
-  rmf_battery::agv::BatterySystem battery_system{24.0, 40.0, 2.0};
+  rmf_battery::agv::BatterySystem battery_system{24.0, 40.0, 8.8};
   rmf_battery::agv::MechanicalSystem mechanical_system{70.0, 40.0, 0.22};
   rmf_battery::agv::PowerSystem power_system{"processor", 20.0};
 

@@ -1,4 +1,4 @@
 - agent_id: 0
-  tasks: [6, 7, 101, 2]
+  tasks: [6, 7, 101, 8, 2]
 - agent_id: 1
-  tasks: [1, 101, 5, 4, 3]
+  tasks: [1, 101, 3, 4, 5]
