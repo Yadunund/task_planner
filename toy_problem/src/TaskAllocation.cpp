@@ -930,35 +930,28 @@ private:
       {
         new_node->assigned_tasks[i].push_back(
           Assignment{charging_task->id(), new_state.value()});
-      }
-      else
-      {
-        continue;
-      }
-      
-      // Update unassigned tasks
-      for (auto& new_u : new_node->unassigned_tasks)
-      {
-        const auto finish = new_u.second.request->estimate(state);
-        if (finish.has_value())
-        {
-          new_u.second.candidates.update_candidate(
-            i, finish.value());
-        }
-        else
-        {
-          discard = true;
-          break;
-        }
-        
-      }
-      if (discard)
-        continue;
 
-      // Update the cost estimate for new_node
-      new_node->cost_estimate = compute_f(*new_node);
+        for (auto& new_u : new_node->unassigned_tasks)
+        {
+          const auto finish = new_u.second.request->estimate(new_state.value());
+          if (finish.has_value())
+          {
+            new_u.second.candidates.update_candidate(
+              i, finish.value());
+          }
+          else
+          {
+            discard = true;
+            break;
+          }
+        }
 
-      new_nodes.push_back(new_node);
+        if (!discard)
+        {
+          new_node->cost_estimate = compute_f(*new_node);
+          new_nodes.push_back(new_node);
+        }
+      }
     }
 
     return new_nodes;
