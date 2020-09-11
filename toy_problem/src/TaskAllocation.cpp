@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <set>
+#include <unordered_set>
 #include <algorithm>
 
 namespace {
@@ -597,8 +598,16 @@ class Filter
 {
 public:
 
-  Filter(bool passthrough)
-    : _passthrough(passthrough)
+  enum class Type
+  {
+    Passthrough,
+    Trie,
+    Hash
+  };
+
+  Filter(Type type, const std::size_t N_tasks)
+    : _type(type),
+      _set(N_tasks, AssignmentHash(N_tasks))
   {
     // Do nothing
   }
@@ -618,15 +627,76 @@ private:
   {
     std::unordered_map<std::size_t, std::unique_ptr<AgentTable>> task;
   };
+  
+  struct AssignmentHash
+  {
+    AssignmentHash(std::size_t N)
+    {
+      // We add 1 to N because
+      _shift = std::ceil(std::log2(N+1));
+    }
 
-  bool _passthrough;
+    std::size_t operator()(const AssignedTasks& assignments) const
+    {
+      std::size_t output = 0;
+      std::size_t count = 0;
+      for (const auto& a : assignments)
+      {
+        for (const auto& s : a)
+        {
+          // We add 1 to the task_id to differentiate between task_id == 0 and
+          // a task being unassigned.
+          const std::size_t id = s.task_id + 1;
+          output += id << (_shift * (count++));
+        }
+      }
+
+      return output;
+    }
+
+    std::size_t _shift;
+  };
+
+  struct AssignmentEqual
+  {
+    bool operator()(const AssignedTasks& A, const AssignedTasks& B) const
+    {
+      if (A.size() != B.size())
+        return false;
+
+      for (std::size_t i=0; i < A.size(); ++i)
+      {
+        const auto& a = A[i];
+        const auto& b = B[i];
+
+        if (a.size() != b.size())
+          return false;
+
+        for (std::size_t j=0; j < a.size(); ++j)
+        {
+          if (a[j].task_id != b[j].task_id)
+            return false;
+        }
+      }
+
+      return true;
+    }
+  };
+
+  using Set = std::unordered_set<AssignedTasks, AssignmentHash, AssignmentEqual>;
+
+  Type _type;
   AgentTable _root;
+  Set _set;
 };
 
 bool Filter::ignore(const Node& node)
 {
-if (_passthrough)
+  if (_type == Type::Passthrough)
     return false;
+
+  if (_type == Type::Hash)
+    return !_set.insert(node.assigned_tasks).second;
 
   bool new_node = false;
 
@@ -682,10 +752,10 @@ public:
     std::vector<ConstTaskRequestPtr> tasks,
     std::vector<RobotState> initial_states,
     ConstTaskRequestPtr charge_battery,
-    const bool use_filter,
+    const Filter::Type filter_type,
     const bool debug)
   : _charge_battery(charge_battery),
-    _use_filter(use_filter),
+    _filter_type(filter_type),
     _debug(debug),
     _initial_states(initial_states)
   {
@@ -693,6 +763,8 @@ public:
     // Initialize the starting node and add it to the priority queue
     auto starting_node = std::make_shared<Node>();
     starting_node->assigned_tasks.resize(initial_states.size());
+
+    _num_tasks = tasks.size();
 
     for (const auto& task : tasks)
       starting_node->unassigned_tasks.insert(
@@ -708,7 +780,7 @@ public:
 
   ConstNodePtr solve()
   {
-    Filter filter{!_use_filter};
+    Filter filter{_filter_type, _num_tasks};
 
     while (!_priority_queue.empty())
     {
@@ -776,8 +848,8 @@ private:
   std::size_t _total_queue_expansions = 0;
 
   ConstTaskRequestPtr _charge_battery;
-
-  bool _use_filter;
+  std::size_t _num_tasks;
+  Filter::Type _filter_type;
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;

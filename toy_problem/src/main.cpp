@@ -92,7 +92,7 @@ int main(int argc, char* argv[])
     tasks,
     robot_states,
     charge_battery_task,
-    true,
+    Filter::Type::Hash,
     true
   );
 
