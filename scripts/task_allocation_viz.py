@@ -45,7 +45,7 @@ class Agent:
 ################################################################################
 
 
-def plot_task_allocation(agents, graph):
+def plot_task_allocation(agents, graph, is_manhattan=False):
   """Plot task allocated agents """
   print("\n--------------- plotting Graph for validation --------------")
   
@@ -62,8 +62,10 @@ def plot_task_allocation(agents, graph):
     ax1.annotate("Agent" + str(agt_id), start_wp) # todo
     verts=[start_wp]
     for tsk in agt.assignments:
-          for wp in tsk.profile.waypoints:
-            verts.append(graph[wp])
+      for wp in tsk.profile.waypoints:
+        if is_manhattan:
+          verts.append((verts[-1][0], graph[wp][1]))
+        verts.append(graph[wp])
     colorline(ax1, verts)
 
     # TODO Clean all these below
@@ -85,12 +87,23 @@ def plot_task_allocation(agents, graph):
     sum_accum += accum_cost
   print(" Grand sum ==> cost: {}, Accum cost {}".format(sum_cost, sum_accum))
 
+  # todo
+  num_intermediate_wp = 2 # delivery
+  if is_manhattan:
+    num_intermediate_wp = 4 # manhattan delivery
+    # num_intermediate_wp = 1 # station
+
   # plot gantt chart here
   for y_axis, (_, costs) in enumerate(all_task_costs.items()):
     sum_cost = 0
-    for cost in costs:
-      ax2.barh(y_axis, width=cost, left=sum_cost)
-      sum_cost += cost
+    task_cost = 0
+    print(len(costs))
+    for i, cost in enumerate(costs):
+      task_cost += cost
+      if ((i+1)%num_intermediate_wp == 0):
+        ax2.barh(y_axis, width=task_cost, left=sum_cost)
+        sum_cost += task_cost
+        task_cost = 0          
 
   ax2.set_yticks(range(len(agents)))
   ax2.set_yticklabels([f'agent{id}' for id, _ in agents.items()])
@@ -172,4 +185,4 @@ if __name__ == '__main__':
   agents, tasks, graph = load_task_yaml("task_config.yaml")
   agents = allocate_tasks(agents, tasks, "allocation.yaml")
   # agents = calculate_cost(agents); # todo
-  plot_task_allocation(agents, graph)
+  plot_task_allocation(agents, graph, True)

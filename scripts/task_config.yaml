@@ -1,22 +1,31 @@
 # Grid World
 
-grid_size: 4
-grid_length: 1000 # meters
+grid_size: 6
+grid_length: 100 # meters
 agents:
- - {id: 1, wp: 13, charging_wp: 13 }
- - {id: 2, wp: 2 , charging_wp: 2 }
+ - {id: 0, wp: 18, charging_wp: 13 }
+ - {id: 1, wp: 2 , charging_wp: 2 }
 #  - {id: 3, wp: 21, charging_wp: 2 }
 tasks:
+  charging: {id: 101}
   delivery:
+    - {id: 1, pickup: 25, dropoff: 32}
+    - {id: 2, pickup: 5, dropoff: 9}
+    - {id: 3, pickup: 12, dropoff: 18}
+    - {id: 4, pickup: 34, dropoff: 23}
+    - {id: 5, pickup: 16, dropoff: 14}
+    - {id: 6, pickup: 8, dropoff: 14}
+    - {id: 7, pickup: 21, dropoff: 26}
+
     # - {id: 0, pickup: 0, dropoff: 22}
-    - {id: 1, pickup: 0, dropoff: 3}
-    - {id: 2, pickup: 15, dropoff: 2}
-    - {id: 3, pickup: 7, dropoff: 9}
-    - {id: 4, pickup: 8, dropoff: 11}
-    - {id: 5, pickup: 10, dropoff: 0}
-    - {id: 6, pickup: 4, dropoff: 8}
-    - {id: 7, pickup: 8, dropoff: 14}
-    - {id: 8, pickup: 5, dropoff: 11}
+    # - {id: 1, pickup: 0, dropoff: 3}
+    # - {id: 2, pickup: 15, dropoff: 2}
+    # - {id: 3, pickup: 7, dropoff: 9}
+    # - {id: 4, pickup: 8, dropoff: 11}
+    # - {id: 5, pickup: 10, dropoff: 0}
+    # - {id: 6, pickup: 4, dropoff: 8}
+    # - {id: 7, pickup: 8, dropoff: 14}
+    # - {id: 8, pickup: 5, dropoff: 11}
     # - {id: 9, pickup: 9, dropoff: 0}
     # - {id: 10, pickup: 1, dropoff: 3}
   
