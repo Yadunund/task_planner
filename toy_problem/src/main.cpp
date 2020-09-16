@@ -85,7 +85,8 @@ int main(int argc, char* argv[])
   {
     tasks.push_back(
       DeliveryTaskRequest::make(
-        tk.id, tk.pickup, tk.dropoff, motion_sink, device_sink, planner, drain_battery));
+        tk.id, tk.pickup, tk.dropoff, motion_sink,
+        device_sink, planner, drain_battery, tk.start_time));
   };
 
   TaskPlanner task_planner(
@@ -97,16 +98,32 @@ int main(int argc, char* argv[])
   );
 
   const auto begin_time = std::chrono::steady_clock::now();
-  const auto solution = task_planner.solve();
+  const auto solution = task_planner.complete_solve();
   const auto end_time = std::chrono::steady_clock::now();
   const double time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
 
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
-  if (!solution)
+  if (solution.empty())
   {
     std::cout << "No solution found!" << std::endl;
     return 0;
   }
-  write_allocation_config(allocation_config, solution->assigned_tasks);
+  std::cout << "\n-------------------------------------------\n";
+  std::cout << "Total agents: " << robot_states.size() <<std::endl;
+  std::cout <<  "Total tasks: " << tasks.size() << std::endl;
+  std::cout << "Assignments:\n";
+  for (std::size_t i = 0; i < solution.size(); ++i)
+  {
+    std::cout << "Robot " << i << ":\n";
+    for (const auto& a : solution[i])
+    {
+      std::cout << " (" << a.task_id << ": " << a.state.finish_time 
+                << ", " << a.state.battery_soc * 100 << ")";
+      std::cout << "\n";
+    }
+  }
+  std::cout << std::endl;
+
+  write_allocation_config(allocation_config, solution);
 }

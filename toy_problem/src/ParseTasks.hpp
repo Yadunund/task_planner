@@ -19,6 +19,7 @@ class TaskConfig
     struct DeliveryTask
     {
       std::size_t id;
+      double start_time;
       std::size_t pickup;
       std::size_t dropoff;
     };
@@ -43,6 +44,7 @@ TaskConfig read_task_config(const std::string& yaml_path)
   {
     TaskConfig::DeliveryTask delivery = {
       task["id"].as<std::size_t>(),
+      task["start"].as<double>(),
       task["pickup"].as<std::size_t>(),
       task["dropoff"].as<std::size_t>()
     };   
@@ -66,7 +68,7 @@ TaskConfig read_task_config(const std::string& yaml_path)
 /// \return Allocated Tasks
 void write_allocation_config(
   const std::string& yaml_path,
-  const AssignedTasks& allocations )
+  const Node::AssignedTasks& allocations )
 {
   // allocations
   
