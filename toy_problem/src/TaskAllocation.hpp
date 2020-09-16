@@ -295,7 +295,7 @@ public:
     rmf_utils::optional<RobotState> state = initial_state;
     state->waypoint = _dropoff_waypoint;
 
-    double variant_duration = 0.0;
+    _variant_duration = 0.0;
 
     const auto now = std::chrono::steady_clock::now();
     auto start_time = now +
@@ -319,14 +319,14 @@ public:
       // We assume we can always compute a plan
       const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
       const auto& finish_time = *trajectory.finish_time();
-      variant_duration = rmf_traffic::time::to_seconds(
+      _variant_duration = rmf_traffic::time::to_seconds(
         finish_time - start_time);
 
       if(_drain_battery)
       {
         // Compute battery drain
         dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
-        dSOC_device = _device_sink->compute_change_in_charge(variant_duration);
+        dSOC_device = _device_sink->compute_change_in_charge(_variant_duration);
         battery_soc = battery_soc - dSOC_motion - dSOC_device;
       }
 
@@ -342,7 +342,7 @@ public:
     // Factor in invariants
     state->finish_time =
       wait_until(initial_state) +
-      variant_duration +
+      _variant_duration +
       _invariant_duration;
 
     battery_soc -= _invariant_battery_drain;
@@ -376,27 +376,7 @@ public:
     const auto start_time = std::chrono::steady_clock::now() +
       rmf_traffic::time::from_seconds(initial_state.finish_time);
 
-    double travel_time = 0.0;
-
-    const bool at_goal = initial_state.waypoint == _pickup_waypoint;
-    if (!at_goal)
-    {
-      Planner::Start start{
-      start_time,
-      initial_state.waypoint,
-      0.0};
-
-      Planner::Goal goal{_pickup_waypoint};
-
-      const auto result_to_pickup = _planner->plan(start, goal);
-      // We assume we can always compute a plan
-      const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
-      const auto& finish_time = *trajectory.finish_time();
-      travel_time = rmf_traffic::time::to_seconds(
-        finish_time - start_time);
-    }
-
-    const double ideal_start = _start_time - travel_time;
+    const double ideal_start = _start_time - _variant_duration;
     return std::max(initial_state.finish_time, ideal_start);
 
   }
@@ -411,6 +391,7 @@ private:
   std::shared_ptr<Planner> _planner;
   bool _drain_battery;
   double _invariant_duration;
+  mutable double _variant_duration; // cache
   double _invariant_battery_drain;
   double _start_time;
 };
