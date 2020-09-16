@@ -141,6 +141,7 @@ public:
       rmf_traffic::time::from_seconds(initial_state.finish_time);
 
     double battery_soc = initial_state.battery_soc;
+    _variant_duration = 0.0;
 
     if (initial_state.waypoint != initial_state.charging_waypoint)
     {
@@ -155,17 +156,15 @@ public:
       const auto result = _planner->plan(start, goal);
       const auto& trajectory = result->get_itinerary().back().trajectory();
       const auto& finish_time = *trajectory.finish_time();
-      const double travel_duration = rmf_traffic::time::to_seconds(
+      const double _variant_duration = rmf_traffic::time::to_seconds(
         finish_time - start_time);
-
-      state->finish_time += travel_duration;
 
       if (_drain_battery)
       {
         const double dSOC_motion = _motion_sink->compute_change_in_charge(
           trajectory);
         const double dSOC_device = _device_sink->compute_change_in_charge(
-          travel_duration);
+          _variant_duration);
         battery_soc = battery_soc - dSOC_motion - dSOC_device;
       }
 
@@ -184,7 +183,10 @@ public:
       (3600 * delta_soc * _battery_system.nominal_capacity()) /
       _battery_system.charging_current();
 
-    state->finish_time += time_to_charge;
+    state->finish_time = 
+      wait_until(initial_state) +
+      _variant_duration +
+      time_to_charge;
     state->battery_soc = _charge_soc;
     return state;
 
@@ -200,9 +202,9 @@ public:
     return 0.0;
   }
 
-  double wait_until(const RobotState& state) const final
+  double wait_until(const RobotState& initial_state) const final
   {
-    return 0.0;
+    return initial_state.finish_time;
   }
 
 private:
@@ -216,6 +218,7 @@ private:
   // soc to always charge the battery up to
   double _charge_soc = 1.0;
   double _invariant_duration;
+  mutable double _variant_duration; // cache
  
 };
 
@@ -372,13 +375,8 @@ public:
 
   double wait_until(const RobotState& initial_state) const final
   {
-
-    const auto start_time = std::chrono::steady_clock::now() +
-      rmf_traffic::time::from_seconds(initial_state.finish_time);
-
     const double ideal_start = _start_time - _variant_duration;
     return std::max(initial_state.finish_time, ideal_start);
-
   }
 
 
@@ -431,7 +429,7 @@ public:
   Candidates(Candidates&&) = default;
   Candidates& operator=(Candidates&&) = default;
 
-  // We have have more than one best candidate so we store their iterators in
+  // We may have more than one best candidate so we store their iterators in
   // a Range
   struct Range
   {
@@ -1209,7 +1207,7 @@ private:
           Assignment{
             charging_task->id(),
             new_state.value(),
-            new_state.value().finish_time});
+            state.finish_time});
 
         for (auto& new_u : new_node->unassigned_tasks)
         {
