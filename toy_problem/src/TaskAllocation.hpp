@@ -375,6 +375,28 @@ public:
 
   double wait_until(const RobotState& initial_state) const final
   {
+    // double variant_duration = 0.0;
+
+    // if (initial_state.waypoint != _pickup_waypoint)
+    // {
+    //   const auto start_time = std::chrono::steady_clock::now() + 
+    //     rmf_traffic::time::from_seconds(initial_state.finish_time);
+    //   Planner::Start start{
+    //   start_time,
+    //   initial_state.waypoint,
+    //   0.0};
+
+    //   Planner::Goal goal{_pickup_waypoint};
+
+    //   const auto result_to_pickup = _planner->plan(start, goal);
+    //   // We assume we can always compute a plan
+    //   const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
+    //   const auto& finish_time = *trajectory.finish_time();
+    //   variant_duration = rmf_traffic::time::to_seconds(
+    //     finish_time - start_time);
+    // }
+    // const double ideal_start = _start_time - variant_duration;
+
     const double ideal_start = _start_time - _variant_duration;
     return std::max(initial_state.finish_time, ideal_start);
   }
@@ -1025,23 +1047,20 @@ private:
 
   double get_latest_time(const Node& node)
   {
-    double latest_time = -std::numeric_limits<double>::infinity();
-
-    for (const auto& agent : node.assigned_tasks)
+    double latest = -std::numeric_limits<double>::infinity();
+    for (const auto& a : node.assigned_tasks)
     {
-      if (agent.empty())
-      {
+      if (a.empty())
         continue;
-      }
 
-      const double finish_time = agent.back().state.finish_time;
-      if (latest_time < finish_time)
-        latest_time = finish_time;
+      const double f = a.back().state.finish_time;
+      if (latest < f)
+        latest = f;
     }
 
-    assert(!std::isinf(latest_time));
+    assert(!std::isinf(latest));
 
-    return latest_time;
+    return latest;
   }
 
   double compute_g(const Node::AssignedTasks& assigned_tasks)
@@ -1128,8 +1147,17 @@ private:
       const auto& range = u.second.candidates.best_candidates();
       for (auto it = range.begin; it!= range.end; it++)
       {
-        auto new_node = std::make_shared<Node>(*parent);
         const auto& entry = it->second;
+
+        if (parent->latest_time + segmentation_threshold < entry.wait_until)
+        {
+
+          // No need to assign task as timeline is not relevant
+          continue;
+        }
+
+        auto new_node = std::make_shared<Node>(*parent);
+
         // Assign the unassigned task
         new_node->assigned_tasks[entry.candidate].push_back(
           Assignment{u.first, entry.state, u.second.earliest_start_time});
