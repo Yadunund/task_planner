@@ -986,7 +986,19 @@ public:
 
       task_id_map = std::move(new_task_id_map);
 
-      node = make_initial_node(_initial_states, new_tasks);
+      // copy final state estimates 
+      std::vector<RobotState> new_states;
+      new_states.resize(node->assigned_tasks.size());
+      for (std::size_t i = 0; i < node->assigned_tasks.size(); ++i)
+      {
+        const auto& assignments = node->assigned_tasks[i];
+        if (assignments.empty())
+          new_states[i] = _initial_states[i];
+        else
+          new_states[i] = assignments.back().state;        
+      }
+
+      node = make_initial_node(new_states, new_tasks);
     }
 
     return complete_assignments;
@@ -1234,7 +1246,7 @@ private:
       auto charging_task = _charge_battery;
       const auto& assignments = new_node->assigned_tasks[i];
       RobotState state;
-      if (assignments.size() > 0)
+      if (!assignments.empty())
       {
         const auto& last_assignment = assignments.back();
         state = last_assignment.state;
@@ -1275,7 +1287,7 @@ private:
         {
           new_node->cost_estimate = compute_f(*new_node);
           new_node->latest_time = get_latest_time(*new_node);
-          new_nodes.push_back(new_node);
+          new_nodes.push_back(std::move(new_node));
         }
       }
     }

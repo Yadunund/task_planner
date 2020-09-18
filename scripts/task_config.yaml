@@ -13,9 +13,9 @@ tasks:
     - {id: 3, start: 0, pickup: 7, dropoff: 9}
     - {id: 4, start: 50000, pickup: 8, dropoff: 11}
     - {id: 5, start: 50000, pickup: 10, dropoff: 0}
-    - {id: 6, start: 60000, pickup: 4, dropoff: 8}
-    - {id: 7, start: 60000, pickup: 8, dropoff: 14}
-    - {id: 8, start: 60000, pickup: 5, dropoff: 11}
-    - {id: 9, start: 60000, pickup: 9, dropoff: 0}
+    # - {id: 6, start: 60000, pickup: 4, dropoff: 8}
+    # - {id: 7, start: 60000, pickup: 8, dropoff: 14}
+    # - {id: 8, start: 60000, pickup: 5, dropoff: 11}
+    # - {id: 9, start: 60000, pickup: 9, dropoff: 0}
     # - {id: 10, start: 60000, pickup: 1, dropoff: 3}
     # - {id: 11, start: 60000, pickup: 0, dropoff: 12}
