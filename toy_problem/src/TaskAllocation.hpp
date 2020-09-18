@@ -132,6 +132,8 @@ public:
     const RobotState& initial_state) const final
   {
 
+    // TODO: should we consider adding a cost to the finish_time instead of 
+    // returning nullopt here?
     if (abs(initial_state.battery_soc - _charge_soc) < 1e-3)
     {
       std::cout << " -- Charge battery: Battery full" << std::endl;
@@ -876,18 +878,18 @@ public:
       {
         _goal_node = *top;
         print_conclusion();
-        // std::cout << "Battery SOC:" << std::endl;
-        // for (std::size_t i = 0; i < top->assigned_tasks.size(); ++i)
-        // {
-        //   std::cout << "  Agent: " << i << std::endl;
-        //   for (const auto& assignment : top->assigned_tasks[i])
-        //   {
-        //     std::cout << std::setprecision(4) << "    " << assignment.task_id 
-        //               << " : " << 100 * assignment.state.battery_soc 
-        //               << "% at time " << assignment.state.finish_time << "s" 
-        //               << std::endl;
-        //   }
-        // }
+        std::cout << "Battery SOC:" << std::endl;
+        for (std::size_t i = 0; i < top->assigned_tasks.size(); ++i)
+        {
+          std::cout << "  Agent: " << i << std::endl;
+          for (const auto& assignment : top->assigned_tasks[i])
+          {
+            std::cout << std::setprecision(4) << "    " << assignment.task_id 
+                      << " : " << 100 * assignment.state.battery_soc 
+                      << "% at time " << assignment.state.finish_time << "s" 
+                      << std::endl;
+          }
+        }
         return top;
       }
 
@@ -945,7 +947,6 @@ public:
 
     while (node)
     {
-
       if (greedy)
         node = greedy_solve(node);
       else
@@ -957,8 +958,8 @@ public:
         return {};
       }
 
-      // if(_debug)
-      //   print_solution_node(*node, task_id_map);
+      if(_debug)
+        print_node(*node);
 
       assert(complete_assignments.size() == node->assigned_tasks.size());
       for (std::size_t i = 0; i < complete_assignments.size(); ++i)
@@ -996,6 +997,25 @@ public:
           new_states[i] = _initial_states[i];
         else
           new_states[i] = assignments.back().state;        
+      }
+
+      if (_debug)
+      {
+        std::cout << "Updating node with states and requests: " << std::endl;
+        std::cout << "  *Initial States: wp soc finish_time" << std::endl;
+        for (std::size_t i = 0; i < new_states.size(); ++i)
+        {
+          const auto& state = new_states[i];
+          std::cout << "    " << i << " : " << state.waypoint << " , " 
+                    <<  state.battery_soc * 100 <<  "% , "
+                    <<  state.finish_time << "s" << std::endl;
+        }
+        std::cout << "  *Tasks: ";
+        for (std::size_t i = 0; i < new_tasks.size(); ++i)
+        {
+          std::cout << " " << new_tasks[i]->id() << " ";
+        }
+        std::cout << std::endl;
       }
 
       node = make_initial_node(new_states, new_tasks);
@@ -1265,7 +1285,7 @@ private:
           Assignment{
             charging_task->id(),
             new_state.value().finish_state,
-            state.finish_time});
+            new_state.value().wait_until});
 
         for (auto& new_u : new_node->unassigned_tasks)
         {
