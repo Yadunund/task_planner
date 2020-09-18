@@ -905,7 +905,31 @@ public:
     return nullptr;
   }
 
-  Node::AssignedTasks complete_solve()
+  ConstNodePtr greedy_solve(ConstNodePtr node)
+  {
+    while (!finished(*node))
+    {
+      ConstNodePtr next_node = nullptr;
+      for (const auto& u : node->unassigned_tasks)
+      {
+        const auto& range = u.second.candidates.best_candidates();
+        for (auto it = range.begin; it != range.end; ++it)
+        {
+          if (auto n = expand_candidate(it, u, node, nullptr))
+          {
+            if (!next_node || (n->cost_estimate < next_node->cost_estimate))
+              next_node = std::move(n);
+          }
+        }
+      }
+
+      node = next_node;
+    }
+
+    return node;
+  }
+
+  Node::AssignedTasks complete_solve(bool greedy)
   {
 
     auto node = make_initial_node(_initial_states, _tasks);
@@ -922,7 +946,10 @@ public:
     while (node)
     {
 
-      node = solve(node);
+      if (greedy)
+        node = greedy_solve(node);
+      else
+        node = solve(node);
 
       if (!node)
       {
@@ -933,7 +960,7 @@ public:
       // if(_debug)
       //   print_solution_node(*node, task_id_map);
 
-      assert(complete_assignments.size() == node->assignments.size());
+      assert(complete_assignments.size() == node->assigned_tasks.size());
       for (std::size_t i = 0; i < complete_assignments.size(); ++i)
       {
         auto& all_assignments = complete_assignments[i];
@@ -1119,6 +1146,71 @@ private:
     return compute_g(n) + compute_h(n);
   }
 
+  ConstNodePtr expand_candidate(
+    const Candidates::Map::const_iterator& it,
+    const Node::UnassignedTasks::value_type& u,
+    const ConstNodePtr& parent,
+    Filter* filter)
+
+  {
+    const auto& entry = it->second;
+
+    if (parent->latest_time + segmentation_threshold < entry.wait_until)
+    {
+
+      // No need to assign task as timeline is not relevant
+      return nullptr;
+    }
+
+    auto new_node = std::make_shared<Node>(*parent);
+
+    // Assign the unassigned task
+    new_node->assigned_tasks[entry.candidate].push_back(
+      Assignment{u.first, entry.state, u.second.earliest_start_time});
+    
+    // Erase the assigned task from unassigned tasks
+    new_node->pop_unassigned(u.first);
+
+    // Update states of unassigned tasks for the candidate
+    bool discard = false;
+    for (auto& new_u : new_node->unassigned_tasks)
+    {
+      const auto finish =
+        new_u.second.request->estimate_finish(entry.state);
+      if (finish.has_value())
+      {
+        new_u.second.candidates.update_candidate(
+          entry.candidate,
+          finish.value().finish_state,
+          finish.value().wait_until);
+      }
+      else
+      {
+        discard = true;
+        break;
+      }
+    }
+
+    if (discard)
+      return nullptr;
+
+    // Update the cost estimate for new_node
+    new_node->cost_estimate = compute_f(*new_node);
+    new_node->latest_time = get_latest_time(*new_node);
+
+    // Apply filter
+    if (filter && filter->ignore(*new_node))
+    {
+      std::cout << "Ignoring node: " << std::endl;
+      print_node(*new_node);
+      std::cout << "==============================================" << std::endl;
+      return nullptr;
+    }
+
+    return new_node;
+
+  }
+
   std::vector<ConstNodePtr> expand(ConstNodePtr parent, Filter& filter)
   {
     std::vector<ConstNodePtr> new_nodes;
@@ -1129,62 +1221,8 @@ private:
       const auto& range = u.second.candidates.best_candidates();
       for (auto it = range.begin; it!= range.end; it++)
       {
-        const auto& entry = it->second;
-
-        if (parent->latest_time + segmentation_threshold < entry.wait_until)
-        {
-
-          // No need to assign task as timeline is not relevant
-          continue;
-        }
-
-        auto new_node = std::make_shared<Node>(*parent);
-
-        // Assign the unassigned task
-        new_node->assigned_tasks[entry.candidate].push_back(
-          Assignment{u.first, entry.state, u.second.earliest_start_time});
-        
-        // Erase the assigned task from unassigned tasks
-        new_node->pop_unassigned(u.first);
-
-        // Update states of unassigned tasks for the candidate
-        bool discard = false;
-        for (auto& new_u : new_node->unassigned_tasks)
-        {
-          const auto finish =
-            new_u.second.request->estimate_finish(entry.state);
-          if (finish.has_value())
-          {
-            new_u.second.candidates.update_candidate(
-              entry.candidate,
-              finish.value().finish_state,
-              finish.value().wait_until);
-          }
-          else
-          {
-            discard = true;
-            break;
-          }
-        }
-
-        if (discard)
-          continue;
-
-        // Update the cost estimate for new_node
-        new_node->cost_estimate = compute_f(*new_node);
-        new_node->latest_time = get_latest_time(*new_node);
-
-        // Apply filter
-        if (filter.ignore(*new_node))
-        {
-          std::cout << "Ignoring node: " << std::endl;
-          print_node(*new_node);
-          std::cout << "==============================================" << std::endl;
-          continue;
-        }
-
-        new_nodes.push_back(std::move(new_node));
-        
+        if (auto new_node = expand_candidate(it, u, parent, &filter))
+          new_nodes.push_back(std::move(new_node));
       }
     }
 

@@ -3,6 +3,26 @@
 
 //=========================================================================
 
+void print_solution (
+  const Node::AssignedTasks& solution,
+  const std::vector<RobotState>& robot_states,
+  const std::vector<ConstTaskRequestPtr>& tasks)
+{
+  std::cout << "Total agents: " << robot_states.size() <<std::endl;
+  std::cout <<  "Total tasks: " << tasks.size() << std::endl;
+  std::cout << "Assignments:\n";
+  for (std::size_t i = 0; i < solution.size(); ++i)
+  {
+    std::cout << "Robot " << i << ":\n";
+    for (const auto& a : solution[i])
+    {
+      std::cout << " (" << a.task_id << ": " << a.state.finish_time 
+                << ", " << a.state.battery_soc * 100 << ")";
+      std::cout << "\n";
+    }
+  }
+
+}
 int main(int argc, char* argv[])
 { 
   using SimpleMotionPowerSink = rmf_battery::agv::SimpleMotionPowerSink;
@@ -97,11 +117,14 @@ int main(int argc, char* argv[])
     true
   );
 
-  const auto begin_time = std::chrono::steady_clock::now();
-  const auto solution = task_planner.complete_solve();
-  const auto end_time = std::chrono::steady_clock::now();
-  const double time_to_solve = rmf_traffic::time::to_seconds(
+  auto begin_time = std::chrono::steady_clock::now();
+  const auto solution = task_planner.complete_solve(false);
+  auto end_time = std::chrono::steady_clock::now();
+  double time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
+
+  std::cout << "\n-------------------------------------------\n";
+  std::cout << "A* Solver: " << std::endl;
 
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
   if (solution.empty())
@@ -109,21 +132,26 @@ int main(int argc, char* argv[])
     std::cout << "No solution found!" << std::endl;
     return 0;
   }
+
+  print_solution(solution, robot_states, tasks);
+
+
+  begin_time = std::chrono::steady_clock::now();
+  const auto greedy_solution = task_planner.complete_solve(true);
+  end_time = std::chrono::steady_clock::now();
+  time_to_solve = rmf_traffic::time::to_seconds(
+    end_time - begin_time);
+
   std::cout << "\n-------------------------------------------\n";
-  std::cout << "Total agents: " << robot_states.size() <<std::endl;
-  std::cout <<  "Total tasks: " << tasks.size() << std::endl;
-  std::cout << "Assignments:\n";
-  for (std::size_t i = 0; i < solution.size(); ++i)
+  std::cout << "Greedy Solver: " << std::endl;
+
+  std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
+  if (solution.empty())
   {
-    std::cout << "Robot " << i << ":\n";
-    for (const auto& a : solution[i])
-    {
-      std::cout << " (" << a.task_id << ": " << a.state.finish_time 
-                << ", " << a.state.battery_soc * 100 << ")";
-      std::cout << "\n";
-    }
+    std::cout << "No solution found!" << std::endl;
+    return 0;
   }
-  std::cout << std::endl;
+  print_solution(greedy_solution, robot_states, tasks);
 
   write_allocation_config(allocation_config, solution);
 }

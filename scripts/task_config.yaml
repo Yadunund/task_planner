@@ -17,7 +17,5 @@ tasks:
     - {id: 7, start: 60000, pickup: 8, dropoff: 14}
     - {id: 8, start: 60000, pickup: 5, dropoff: 11}
     - {id: 9, start: 60000, pickup: 9, dropoff: 0}
-    - {id: 10, start: 60000, pickup: 1, dropoff: 3}
-    - {id: 11, start: 60000, pickup: 0, dropoff: 12}
-
-  station: [10,15,7,18,3,4,20,5,9,23] # not in used now
+    # - {id: 10, start: 60000, pickup: 1, dropoff: 3}
+    # - {id: 11, start: 60000, pickup: 0, dropoff: 12}
