@@ -11,6 +11,7 @@
 
   <depend>rmf_traffic</depend>
   <depend>rmf_battery</depend>
+  <depend>rmf_tasks</depend>
   <depend>eigen</depend>
   
   <export>

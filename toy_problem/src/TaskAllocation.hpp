@@ -11,6 +11,11 @@
 #include <rmf_traffic/schedule/Viewer.hpp>
 #include <rmf_traffic/schedule/Database.hpp>
 
+#include <rmf_tasks/Estimate.hpp>
+#include <rmf_tasks/agv/State.hpp>
+#include <rmf_tasks/requests/Delivery.hpp>
+#include <rmf_tasks/requests/ChargeBattery.hpp>
+
 #include <rmf_battery/agv/SimpleDevicePowerSink.hpp>
 #include <rmf_battery/agv/SimpleMotionPowerSink.hpp>
 #include <rmf_battery/agv/BatterySystem.hpp>
@@ -34,20 +39,6 @@
 namespace {
 
 const double segmentation_threshold = 1.0;
-// ============================================================================
-struct RobotState
-{
-  std::size_t waypoint;
-  std::size_t charging_waypoint;
-  double finish_time = 0.0;
-  double battery_soc = 1.0;
-  double threshold_soc = 0.20;
-  static RobotState make(
-    std::size_t wp_, std::size_t c_wp_)
-  {
-    return RobotState{wp_, c_wp_};
-  }
-};
 
 // ============================================================================
 struct Invariant
@@ -65,342 +56,6 @@ struct InvariantLess
 };
 
 // ============================================================================
-class TaskRequest
-{
-public:
-
-  struct Estimate
-  {
-    RobotState finish_state;
-    double wait_until;
-  };
-
-  // Get the id of the task
-  virtual std::size_t id() const = 0;
-
-  // Estimate the state of the robot when the task is finished along with the
-  // time the robot has to wait before commencing the task
-  virtual rmf_utils::optional<Estimate> estimate_finish(
-    const RobotState& initial_state) const = 0;
-
-  // Estimate the invariant component of the task's duration
-  virtual double invariant_duration() const = 0;
-
-  // Get the earliest start time that this task may begin
-  virtual double earliest_start_time() const = 0;
-
-};
-
-using ConstTaskRequestPtr = std::shared_ptr<TaskRequest>;
-
-// ============================================================================
-class ChargeBatteryTaskRequest : public TaskRequest
-{
-public:
-  ChargeBatteryTaskRequest(
-    rmf_battery::agv::BatterySystem battery_system,
-    std::shared_ptr<rmf_battery::MotionPowerSink> motion_sink,
-    std::shared_ptr<rmf_battery::DevicePowerSink> device_sink,
-    std::shared_ptr<rmf_traffic::agv::Planner> planner,
-    bool drain_battery)
-  : _battery_system(battery_system),
-    _motion_sink(motion_sink),
-    _device_sink(device_sink),
-    _planner(planner),
-    _drain_battery(drain_battery)
-  {
-    _invariant_duration = 0.0;
-  }
-
-  static ConstTaskRequestPtr make(
-    rmf_battery::agv::BatterySystem battery_system,
-    std::shared_ptr<rmf_battery::MotionPowerSink> motion_sink,
-    std::shared_ptr<rmf_battery::DevicePowerSink> device_sink,
-    std::shared_ptr<rmf_traffic::agv::Planner> planner,
-    bool drain_battery = true)
-  {
-    return std::make_shared<ChargeBatteryTaskRequest>(
-      battery_system, motion_sink, device_sink, planner, drain_battery);
-  }
-
-  std::size_t id() const final
-  {
-    return _id;
-  }
-
-  rmf_utils::optional<Estimate> estimate_finish(
-    const RobotState& initial_state) const final
-  {
-
-    // TODO: should we consider adding a cost to the finish_time instead of 
-    // returning nullopt here?
-    if (abs(initial_state.battery_soc - _charge_soc) < 1e-3)
-    {
-      std::cout << " -- Charge battery: Battery full" << std::endl;
-      return rmf_utils::nullopt;
-    }
-
-    auto state = initial_state;
-
-    // Compute time taken to reach charging waypoint from current location
-    state.waypoint = initial_state.charging_waypoint;
-    const auto start_time = std::chrono::steady_clock::now() +
-      rmf_traffic::time::from_seconds(initial_state.finish_time);
-
-    double battery_soc = initial_state.battery_soc;
-    double variant_duration = 0.0;
-
-    if (initial_state.waypoint != initial_state.charging_waypoint)
-    {
-      // Compute plan to charging waypoint along with battery drain
-      rmf_traffic::agv::Planner::Start start{
-        start_time,
-        initial_state.waypoint,
-        0.0};
-
-      rmf_traffic::agv::Planner::Goal goal{initial_state.charging_waypoint};
-
-      const auto result = _planner->plan(start, goal);
-      const auto& trajectory = result->get_itinerary().back().trajectory();
-      const auto& finish_time = *trajectory.finish_time();
-      const double variant_duration = rmf_traffic::time::to_seconds(
-        finish_time - start_time);
-
-      if (_drain_battery)
-      {
-        const double dSOC_motion = _motion_sink->compute_change_in_charge(
-          trajectory);
-        const double dSOC_device = _device_sink->compute_change_in_charge(
-          variant_duration);
-        battery_soc = battery_soc - dSOC_motion - dSOC_device;
-      }
-
-      if (battery_soc <= state.threshold_soc)
-      {
-        // If a robot cannot reach its charging dock given its initial battery soc
-        std::cout << " -- Charge battery: Unable to reach charger" << std::endl;
-        return rmf_utils::nullopt;
-      }
-    }
-
-    // Default _charge_soc = 1.0
-    double delta_soc = _charge_soc - battery_soc;
-    assert(delta_soc >= 0.0);
-    double time_to_charge =
-      (3600 * delta_soc * _battery_system.nominal_capacity()) /
-      _battery_system.charging_current();
-
-    const double wait_until = initial_state.finish_time;
-
-    state.finish_time = 
-      wait_until +
-      variant_duration +
-      time_to_charge;
-
-    state.battery_soc = _charge_soc;
-
-    rmf_utils::optional<Estimate> estimate =
-      Estimate{state, wait_until};
-
-    return estimate;
-
-  }
-
-  double invariant_duration() const final
-  {
-    return _invariant_duration;
-  }
-
-  double earliest_start_time() const final
-  {
-    return 0.0;
-  }
-
-private:
-  // fixed id for now
-  std::size_t _id = 101;
-  rmf_battery::agv::BatterySystem _battery_system;
-  std::shared_ptr<rmf_battery::MotionPowerSink> _motion_sink;
-  std::shared_ptr<rmf_battery::DevicePowerSink> _device_sink;
-  std::shared_ptr<rmf_traffic::agv::Planner> _planner;
-  bool _drain_battery;
-  // soc to always charge the battery up to
-  double _charge_soc = 1.0;
-  double _invariant_duration; 
-};
-
-// ============================================================================
-class DeliveryTaskRequest : public TaskRequest
-{
-public:
-  using Planner = rmf_traffic::agv::Planner;
-  using MotionPowerSink = rmf_battery::MotionPowerSink;
-  using DevicePowerSink = rmf_battery::DevicePowerSink;
-  DeliveryTaskRequest(
-    std::size_t id,
-    std::size_t pickup,
-    std::size_t dropoff,
-    std::shared_ptr<MotionPowerSink> motion_sink,
-    std::shared_ptr<DevicePowerSink> device_sink,
-    std::shared_ptr<Planner> planner,
-    bool drain_battery,
-    double start_time = 0.0)
-  : _id(id),
-    _pickup_waypoint(pickup),
-    _dropoff_waypoint(dropoff),
-    _motion_sink(motion_sink),
-    _device_sink(device_sink),
-    _planner(planner),
-    _drain_battery(drain_battery),
-    _start_time(start_time)
-  {
-    // Calculate duration of invariant component of task
-    const auto plan_start_time = std::chrono::steady_clock::now();
-    Planner::Start start{
-      plan_start_time,
-      _pickup_waypoint,
-      0.0};
-
-    Planner::Goal goal{_dropoff_waypoint};
-    const auto result_to_dropoff = _planner->plan(start, goal);
-
-    const auto trajectory = result_to_dropoff->get_itinerary().back().trajectory();
-    const auto& finish_time = *trajectory.finish_time();
-    _invariant_duration = rmf_traffic::time::to_seconds(
-      finish_time - plan_start_time);
-
-    _invariant_battery_drain = 0.0;
-
-    if (_drain_battery)
-    {
-      // Compute battery drain
-      const double dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
-      const double dSOC_device = _device_sink->compute_change_in_charge(_invariant_duration);
-      _invariant_battery_drain = dSOC_motion + dSOC_device;
-    }
-    
-  }
-
-  static ConstTaskRequestPtr make(
-    std::size_t id,
-    std::size_t pickup,
-    std::size_t dropoff,
-    std::shared_ptr<MotionPowerSink> motion_sink,
-    std::shared_ptr<DevicePowerSink> device_sink,
-    std::shared_ptr<Planner> planner,
-    bool drain_battery = true,
-    double start_time = 0.0)
-  {
-    return std::make_shared<DeliveryTaskRequest>(
-      id, pickup, dropoff, motion_sink, device_sink, planner, drain_battery, start_time);
-  }
-
-  std::size_t id() const final
-  {
-    return _id;
-  }
-
-  rmf_utils::optional<Estimate> estimate_finish(
-    const RobotState& initial_state) const final
-  {
-    auto state = initial_state;
-    state.waypoint = _dropoff_waypoint;
-
-    double variant_duration = 0.0;
-
-    const auto now = std::chrono::steady_clock::now();
-    auto start_time = now +
-      rmf_traffic::time::from_seconds(initial_state.finish_time);
-
-    double battery_soc = initial_state.battery_soc;
-    double dSOC_motion = 0.0;
-    double dSOC_device = 0.0;
-
-    if (initial_state.waypoint != _pickup_waypoint)
-    {
-      // Compute plan to pickup waypoint along with battery drain
-      Planner::Start start{
-      start_time,
-      initial_state.waypoint,
-      0.0};
-
-      Planner::Goal goal{_pickup_waypoint};
-
-      const auto result_to_pickup = _planner->plan(start, goal);
-      // We assume we can always compute a plan
-      const auto& trajectory = result_to_pickup->get_itinerary().back().trajectory();
-      const auto& finish_time = *trajectory.finish_time();
-      variant_duration = rmf_traffic::time::to_seconds(
-        finish_time - start_time);
-
-      if(_drain_battery)
-      {
-        // Compute battery drain
-        dSOC_motion = _motion_sink->compute_change_in_charge(trajectory);
-        dSOC_device = _device_sink->compute_change_in_charge(variant_duration);
-        battery_soc = battery_soc - dSOC_motion - dSOC_device;
-      }
-
-      if (battery_soc <= state.threshold_soc)
-      {
-        std::cout << " -- Delivery: Unable to reach pickup" << std::endl;
-        return rmf_utils::nullopt;
-      }
-
-      start_time = finish_time;
-    }
-
-    const double ideal_start = _start_time - variant_duration;
-    const double wait_until = std::max(initial_state.finish_time, ideal_start);
-
-    // Factor in invariants
-    state.finish_time =
-      wait_until +
-      variant_duration +
-      _invariant_duration;
-
-    battery_soc -= _invariant_battery_drain;
-
-    if (battery_soc <= state.threshold_soc)
-    {
-      std::cout << " -- Delivery: Unable to reach dropoff" << std::endl;
-      return rmf_utils::nullopt;
-    }
-    
-    state.battery_soc = battery_soc;
-
-    // TODO: Check if we have enough charge to head back to nearest charger
-
-    rmf_utils::optional<TaskRequest::Estimate> estimate =
-      Estimate{state, wait_until};
-
-    return estimate;
-  }
-
-  double invariant_duration() const final
-  {
-    return _invariant_duration;
-  }
-
-  double earliest_start_time() const final
-  {
-    return _start_time;
-  }
-
-private:
-  std::size_t _id; // task id
-  std::size_t _pickup_waypoint;
-  std::size_t _dropoff_waypoint;
-  std::shared_ptr<MotionPowerSink> _motion_sink;
-  std::shared_ptr<DevicePowerSink> _device_sink;
-  std::shared_ptr<Planner> _planner;
-  bool _drain_battery;
-  double _invariant_duration;
-  double _invariant_battery_drain;
-  double _start_time;
-};
-
-// ============================================================================
 class Candidates
 {
 public:
@@ -408,16 +63,16 @@ public:
   struct Entry
   {
     std::size_t candidate;
-    RobotState state;
-    double wait_until;
+    rmf_tasks::agv::State state;
+    rmf_traffic::Time wait_until;
   };
 
   // Map finish time to Entry
-  using Map = std::multimap<double, Entry>;
+  using Map = std::multimap<rmf_traffic::Time, Entry>;
 
   static Candidates make(
-      const std::vector<RobotState>& initial_states,
-      const TaskRequest& request);
+      const std::vector<rmf_tasks::agv::State>& initial_states,
+      const rmf_tasks::Request& request);
 
   Candidates(const Candidates& other)
   {
@@ -457,21 +112,22 @@ public:
     return range;
   }
 
-  double best_finish_time() const
+  rmf_traffic::Time best_finish_time() const
   {
     assert(!_value_map.empty());
     return _value_map.begin()->first;
   }
 
   void update_candidate(
-    std::size_t candidate, RobotState state, double wait_until)
+    std::size_t candidate,
+    rmf_tasks::agv::State state,
+    rmf_traffic::Time wait_until)
   {
     const auto it = _candidate_map.at(candidate);
     _value_map.erase(it);
     _candidate_map[candidate] = _value_map.insert(
       {state.finish_time, Entry{candidate, state, wait_until}});
   }
-
 
 private:
   Map _value_map;
@@ -497,8 +153,8 @@ private:
 };
 
 Candidates Candidates::make(
-    const std::vector<RobotState>& initial_states,
-    const TaskRequest& request)
+    const std::vector<rmf_tasks::agv::State>& initial_states,
+    const rmf_tasks::Request& request)
 {
   Map initial_map;
   for (std::size_t i = 0; i < initial_states.size(); ++i)
@@ -508,8 +164,8 @@ Candidates Candidates::make(
     if (finish.has_value())
     {
       initial_map.insert(
-        {finish.value().finish_state.finish_time,
-        Entry{i, finish.value().finish_state, finish.value().wait_until}});
+        {finish.value().finish_state().finish_time(),
+        Entry{i, finish.value().finish_state(), finish.value().wait_until()}});
     }
   }
 
@@ -520,8 +176,8 @@ Candidates Candidates::make(
 struct PendingTask
 {
   PendingTask(
-      std::vector<RobotState> initial_states,
-      ConstTaskRequestPtr request_)
+      std::vector<rmf_tasks::agv::State> initial_states,
+      rmf_tasks::Request::SharedPtr request_)
     : request(std::move(request_)),
       candidates(Candidates::make(initial_states, *request)),
       earliest_start_time(request->earliest_start_time())
@@ -529,17 +185,17 @@ struct PendingTask
     // Do nothing
   }
 
-  ConstTaskRequestPtr request;
+  rmf_tasks::Request::SharedPtr request;
   Candidates candidates;
-  double earliest_start_time;
+  rmf_traffic::Time earliest_start_time;
 };
 
 // ============================================================================
 struct Assignment
 {
   std::size_t task_id;
-  RobotState state;
-  double earliest_start_time;
+  rmf_tasks::agv::State state;
+  rmf_traffic::Time earliest_start_time;
 };
 
 // ============================================================================
@@ -554,7 +210,7 @@ struct Node
   AssignedTasks assigned_tasks;
   UnassignedTasks unassigned_tasks;
   double cost_estimate;
-  double latest_time;
+  rmf_traffic::Time latest_time;
   InvariantSet unassigned_invariants;
 
   void sort_invariants()
@@ -563,7 +219,10 @@ struct Node
     for (const auto& u : unassigned_tasks)
     {
       unassigned_invariants.insert(
-            Invariant{u.first, u.second.request->invariant_duration()});
+        Invariant{
+          u.first, 
+          rmf_traffic::time::to_seconds(u.second.request->invariant_duration())
+        });
     }
   }
 
@@ -810,9 +469,9 @@ public:
   using BatterySystem = rmf_battery::agv::BatterySystem;
 
   TaskPlanner(
-    std::vector<ConstTaskRequestPtr> tasks,
-    std::vector<RobotState> initial_states,
-    ConstTaskRequestPtr charge_battery,
+    std::vector<rmf_tasks::Request::SharedPtr> tasks,
+    std::vector<rmf_tasks::agv::State> initial_states,
+    rmf_tasks::Request::SharedPtr charge_battery,
     const Filter::Type filter_type,
     const bool debug)
   : _charge_battery(charge_battery),
@@ -885,8 +544,8 @@ public:
           for (const auto& assignment : top->assigned_tasks[i])
           {
             std::cout << std::setprecision(4) << "    " << assignment.task_id 
-                      << " : " << 100 * assignment.state.battery_soc 
-                      << "% at time " << assignment.state.finish_time << "s" 
+                      << " : " << 100 * assignment.state.battery_soc() 
+                      << "% at time " << assignment.state.finish_time() << "s" 
                       << std::endl;
           }
         }
@@ -977,7 +636,7 @@ public:
         return complete_assignments;
 
       std::unordered_map<std::size_t, std::size_t> new_task_id_map;
-      std::vector<ConstTaskRequestPtr> new_tasks;
+      std::vector<rmf_tasks::Request::SharedPtr> new_tasks;
       std::size_t task_counter = 0;
       for (const auto& u : node->unassigned_tasks)
       {
@@ -988,7 +647,7 @@ public:
       task_id_map = std::move(new_task_id_map);
 
       // copy final state estimates 
-      std::vector<RobotState> new_states;
+      std::vector<rmf_tasks::agv::State> new_states;
       new_states.resize(node->assigned_tasks.size());
       for (std::size_t i = 0; i < node->assigned_tasks.size(); ++i)
       {
@@ -1006,9 +665,9 @@ public:
         for (std::size_t i = 0; i < new_states.size(); ++i)
         {
           const auto& state = new_states[i];
-          std::cout << "    " << i << " : " << state.waypoint << " , " 
-                    <<  state.battery_soc * 100 <<  "% , "
-                    <<  state.finish_time << "s" << std::endl;
+          std::cout << "    " << i << " : " << state.waypoint() << " , " 
+                    <<  state.battery_soc() * 100 <<  "% , "
+                    <<  state.finish_time() << "s" << std::endl;
         }
         std::cout << "  *Tasks: ";
         for (std::size_t i = 0; i < new_tasks.size(); ++i)
@@ -1029,18 +688,18 @@ private:
   std::size_t _total_queue_entries = 0;
   std::size_t _total_queue_expansions = 0;
 
-  ConstTaskRequestPtr _charge_battery;
+  rmf_tasks::Request::SharedPtr _charge_battery;
   std::size_t _num_tasks;
   Filter::Type _filter_type;
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
-  std::vector<RobotState> _initial_states;
-  std::vector<ConstTaskRequestPtr> _tasks;
+  std::vector<rmf_tasks::agv::State> _initial_states;
+  std::vector<rmf_tasks::Request::SharedPtr> _tasks;
 
   ConstNodePtr make_initial_node(
-    std::vector<RobotState> initial_states,
-    std::vector<ConstTaskRequestPtr> tasks)
+    std::vector<rmf_tasks::agv::State> initial_states,
+    std::vector<rmf_tasks::Request::SharedPtr> tasks)
   {
     auto initial_node = std::make_shared<Node>();
 
@@ -1056,28 +715,33 @@ private:
 
     initial_node->latest_time = [&]() -> double
     {
-      double latest = -std::numeric_limits<double>::infinity();
+      // double latest = -std::numeric_limits<double>::infinity();
+      rmf_traffic::Time latest();
       for (const auto& s : initial_states)
       {
-        if (latest < s.finish_time)
-          latest = s.finish_time;
+        if (latest < s.finish_time())
+          latest = s.finish_time();
       }
 
       assert(!std::isinf(latest));
       return latest;
     }();
 
-    double wait_until = std::numeric_limits<double>::infinity();
+    double wait_until_duration = std::numeric_limits<double>::infinity();
+    rmf_traffic::Time wait_until =
+      rmf_traffic::Time::now() + 
+      rmf_traffic::time::from_seconds(wait_until_duration);
+
     for (const auto& u : initial_node->unassigned_tasks)
     {
       const auto& range = u.second.candidates.best_candidates();
       for (auto it = range.begin; it != range.end; ++it)
       {
-        if (it->second.wait_until < wait_until)
-          wait_until = it->second.wait_until;
+        if (it->second.wait_until() < wait_until)
+          wait_until = it->second.wait_until();
       }
     }
-    assert(!std::isinf(wait_until));
+    // assert(!std::isinf(wait_until));
 
     if (initial_node->latest_time < wait_until)
       initial_node->latest_time = wait_until;
@@ -1265,7 +929,7 @@ private:
       // Assign charging task to an agent
       auto charging_task = _charge_battery;
       const auto& assignments = new_node->assigned_tasks[i];
-      RobotState state;
+      rmf_tasks::agv::State state;
       if (!assignments.empty())
       {
         const auto& last_assignment = assignments.back();

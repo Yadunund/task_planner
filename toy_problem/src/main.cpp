@@ -1,3 +1,6 @@
+#include <rmf_tasks/requests/ChargeBattery.hpp>
+#include <rmf_tasks/requests/Delivery.hpp>
+
 #include "TaskAllocation.hpp"
 #include "ParseTasks.hpp"
 

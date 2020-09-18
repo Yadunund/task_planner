@@ -16,8 +16,9 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rmf_traffic REQUIRED)
-find_package(rmf_battery)
+find_package(rmf_battery REQUIRED)
 find_package(rmf_utils REQUIRED)
+find_package(rmf_tasks REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
@@ -29,6 +30,7 @@ target_link_libraries(toy_problem
   PUBLIC
     yaml-cpp
     rmf_battery::rmf_battery
+    rmf_tasks::rmf_tasks
 )
 
 target_include_directories(toy_problem
