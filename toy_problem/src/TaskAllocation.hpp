@@ -775,7 +775,9 @@ private:
     {
       for (const auto& assignment : agent)
       {
-        cost += assignment.state.finish_time - assignment.earliest_start_time;
+        auto duration =
+          assignment.state.finish_time() - assignment.earliest_start_time;
+        const += rmf_traffic::time::to_seconds(duration);
       }
     }
 
@@ -789,16 +791,16 @@ private:
 
   double compute_h(const Node& node)
   {
-    std::vector<double> initial_queue_values;
+    std::vector<rmf_traffic::Time> initial_queue_values;
     initial_queue_values.resize(
-          node.assigned_tasks.size(), std::numeric_limits<double>::infinity());
+          node.assigned_tasks.size(), rmf_traffic::Time::max());
 
     for (const auto& u : node.unassigned_tasks)
     {
       // We subtract the invariant duration here because otherwise its
       // contribution to the cost estimate will be duplicated in the next section,
       // which could result in an overestimate.
-      const double variant_value =
+      const rmf_traffic::Time variant_value =
           u.second.candidates.best_finish_time()
           - u.second.request->invariant_duration();
 
@@ -814,7 +816,7 @@ private:
     for (std::size_t i=0; i < initial_queue_values.size(); ++i)
     {
       auto& value = initial_queue_values[i];
-      if (std::isinf(value))
+      if (value.time_since_epoch() == rmf_traffic::Time::max().time_since_epoch())
       {
         // Clear out any infinity placeholders. Those candidates simply don't have
         // any unassigned tasks that want to use it.
