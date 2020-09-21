@@ -112,7 +112,7 @@ public:
     return range;
   }
 
-  rmf_traffic::Time best_finish_time() const
+  double best_finish_time() const
   {
     assert(!_value_map.empty());
     return _value_map.begin()->first;
@@ -126,7 +126,10 @@ public:
     const auto it = _candidate_map.at(candidate);
     _value_map.erase(it);
     _candidate_map[candidate] = _value_map.insert(
-      {state.finish_time, Entry{candidate, state, wait_until}});
+      {
+        rmf_traffic::time::to_seconds(state.finish_duration()), 
+        Entry{candidate, state, wait_until}
+      });
   }
 
 private:
@@ -164,8 +167,11 @@ Candidates Candidates::make(
     if (finish.has_value())
     {
       initial_map.insert(
-        {finish.value().finish_state().finish_time(),
-        Entry{i, finish.value().finish_state(), finish.value().wait_until()}});
+        {
+          rmf_traffic::time::to_seconds(
+            finish.value().finish_state().finish_duration()),
+          Entry{i, finish.value().finish_state(), finish.value().wait_until()}
+        });
     }
   }
 
@@ -481,7 +487,6 @@ public:
     _tasks(tasks)
   {
     _num_tasks = tasks.size();
-
   }
 
   ConstNodePtr solve(
@@ -498,14 +503,13 @@ public:
 
     const auto print_conclusion = [&]()
     {
-      const auto finish = std::chrono::steady_clock::now();
-      const auto elapsed = std::chrono::duration_cast<
-          std::chrono::duration<double>>(finish - start);
+      const auto finish = rmf_traffic::Time::now();
+      const double elapsed = rmf_traffic::time::to_seconds(finish - start);
 
       if (_debug)
       {
         std::cout << " ====================== \n";
-        std::cout << "Time elapsed: " << elapsed.count() << std::endl;
+        std::cout << "Time elapsed: " << elapsed << std::endl;
         std::cout << "Winning cost: " << top->cost_estimate << std::endl;
         std::cout << "Final queue size: " << _priority_queue.size() << std::endl;
         std::cout << "Total queue expansions: " << _total_queue_expansions << std::endl;
@@ -543,10 +547,11 @@ public:
           std::cout << "  Agent: " << i << std::endl;
           for (const auto& assignment : top->assigned_tasks[i])
           {
-            std::cout << std::setprecision(4) << "    " << assignment.task_id 
-                      << " : " << 100 * assignment.state.battery_soc() 
-                      << "% at time " << assignment.state.finish_time() << "s" 
-                      << std::endl;
+            std::cout << std::setprecision(4) << "    " << assignment.task_id
+                      << " : " << 100 * assignment.state.battery_soc 
+                      << "% at time "
+                      << rmf_traffic::time::to_seconds(
+                        assignment.state.finish_duration()) << "s" << std::endl;
           }
         }
         return top;
@@ -560,7 +565,7 @@ public:
       // Add copies and with a newly assigned task to queue
       for (const auto&n : new_nodes)
         _priority_queue.push(n);
-      
+
     }
 
     return nullptr;
@@ -592,7 +597,6 @@ public:
 
   Node::AssignedTasks complete_solve(bool greedy)
   {
-
     auto node = make_initial_node(_initial_states, _tasks);
 
     Node::AssignedTasks complete_assignments;
@@ -667,7 +671,8 @@ public:
           const auto& state = new_states[i];
           std::cout << "    " << i << " : " << state.waypoint() << " , " 
                     <<  state.battery_soc() * 100 <<  "% , "
-                    <<  state.finish_time() << "s" << std::endl;
+                    << rmf_traffic::time::to_seconds(
+                      state.finish_duration() << "s" << std::endl;
         }
         std::cout << "  *Tasks: ";
         for (std::size_t i = 0; i < new_tasks.size(); ++i)
@@ -677,7 +682,7 @@ public:
         std::cout << std::endl;
       }
 
-      node = make_initial_node(new_states, new_tasks);
+      node = make_initial_node(new_states, new_tasks, start_time);
     }
 
     return complete_assignments;
@@ -699,7 +704,8 @@ private:
 
   ConstNodePtr make_initial_node(
     std::vector<rmf_tasks::agv::State> initial_states,
-    std::vector<rmf_tasks::Request::SharedPtr> tasks)
+    std::vector<rmf_tasks::Request::SharedPtr> tasks,
+    rmf_traffic::Time relative_start_time)
   {
     auto initial_node = std::make_shared<Node>();
 
@@ -713,24 +719,21 @@ private:
 
     initial_node->sort_invariants();
 
-    initial_node->latest_time = [&]() -> double
+    initial_node->latest_time = [&]() -> rmf_traffic::Time
     {
-      // double latest = -std::numeric_limits<double>::infinity();
-      rmf_traffic::Time latest();
+      rmf_traffic::Time latest = rmf_traffic::Time::max();
+      
       for (const auto& s : initial_states)
       {
-        if (latest < s.finish_time())
-          latest = s.finish_time();
+        auto finish_time = relative_start_time + s.finish_duration();
+        if (latest < finish_time)
+          latest = finish_time;
       }
 
-      assert(!std::isinf(latest));
       return latest;
     }();
 
-    double wait_until_duration = std::numeric_limits<double>::infinity();
-    rmf_traffic::Time wait_until =
-      rmf_traffic::Time::now() + 
-      rmf_traffic::time::from_seconds(wait_until_duration);
+    rmf_traffic::Time wait_until = rmf_traffic::Time::max();
 
     for (const auto& u : initial_node->unassigned_tasks)
     {
@@ -741,7 +744,6 @@ private:
           wait_until = it->second.wait_until();
       }
     }
-    // assert(!std::isinf(wait_until));
 
     if (initial_node->latest_time < wait_until)
       initial_node->latest_time = wait_until;
@@ -750,46 +752,54 @@ private:
   }
 
 
-  double get_latest_time(const Node& node)
+  rmf_traffic::Time get_latest_time(
+    const Node& node,
+    rmf_traffic::Time relative_start_time)
   {
-    double latest = -std::numeric_limits<double>::infinity();
+    rmf_traffic::Time latest = rmf_traffic::Time::min();
     for (const auto& a : node.assigned_tasks)
     {
       if (a.empty())
         continue;
-
-      const double f = a.back().state.finish_time;
-      if (latest < f)
-        latest = f;
+      
+      const auto finish_time =
+        relative_start_time + a.back().state.finish_duration();
+      if (latest < finish_time)
+        latest = finish_time;
     }
-
-    assert(!std::isinf(latest));
 
     return latest;
   }
 
-  double compute_g(const Node::AssignedTasks& assigned_tasks)
+  double compute_g(
+    const Node::AssignedTasks& assigned_tasks,
+    rmf_traffic::Time relative_start_time)
   {
     double cost = 0.0;
     for (const auto& agent : assigned_tasks)
     {
       for (const auto& assignment : agent)
       {
-        auto duration =
-          assignment.state.finish_time() - assignment.earliest_start_time;
-        const += rmf_traffic::time::to_seconds(duration);
+        auto finish_time =
+          assignment.earliest_start_time + assignment.state.finish_duration();
+        cost +=
+          rmf_traffic::time::to_seconds(finish_time - relative_start_time);
       }
     }
 
     return cost;
   }
 
-  double compute_g(const Node& node)
+  double compute_g(
+    const Node& node,
+    rmf_traffic::Time relative_start_time)
   {
-    return compute_g(node.assigned_tasks);
+    return compute_g(node.assigned_tasks, relative_start_time);
   }
 
-  double compute_h(const Node& node)
+  double compute_h(
+    const Node& node,
+    rmf_traffic::Time relative_start_time)
   {
     std::vector<rmf_traffic::Time> initial_queue_values;
     initial_queue_values.resize(
@@ -839,9 +849,11 @@ private:
     return queue.compute_cost();
   }
 
-  double compute_f(const Node& n)
+  double compute_f(
+    const Node& n,
+    rmf_traffic::Time start_time = rmf_traffic::Time::now())
   {
-    return compute_g(n) + compute_h(n);
+    return compute_g(n, start_time) + compute_h(n, start_time);
   }
 
   ConstNodePtr expand_candidate(
