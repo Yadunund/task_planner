@@ -940,10 +940,10 @@ public:
     complete_assignments.resize(node->assigned_tasks.size());
 
     std::unordered_map<std::size_t, std::size_t> task_id_map;
-    for (std::size_t i = 0; i < _tasks.size(); ++i)
-      task_id_map[i] = _tasks[i]->id();
-    // Add charging task id
-    task_id_map[task_id_map.size()] = 101;
+    // for (std::size_t i = 0; i < _tasks.size(); ++i)
+    //   task_id_map[i] = _tasks[i]->id();
+    // // Add charging task id
+    // task_id_map[task_id_map.size()] = _charge_battery->id();
 
     while (node)
     {
@@ -976,36 +976,36 @@ public:
       if (node->unassigned_tasks.empty())
         return complete_assignments;
 
-      std::unordered_map<std::size_t, std::size_t> new_task_id_map;
+      // std::unordered_map<std::size_t, std::size_t> new_task_id_map;
       std::vector<ConstTaskRequestPtr> new_tasks;
-      std::size_t task_counter = 0;
+      // std::size_t task_counter = 0;
       for (const auto& u : node->unassigned_tasks)
       {
         new_tasks.push_back(u.second.request);
-        new_task_id_map[task_counter++] = task_id_map[u.first];
+        // new_task_id_map[task_counter++] = task_id_map[u.first];
       }
 
-      task_id_map = std::move(new_task_id_map);
+      // task_id_map = std::move(new_task_id_map);
 
       // copy final state estimates 
-      std::vector<RobotState> new_states;
-      new_states.resize(node->assigned_tasks.size());
+      std::vector<RobotState> estimates;
+      estimates.resize(node->assigned_tasks.size());
       for (std::size_t i = 0; i < node->assigned_tasks.size(); ++i)
       {
         const auto& assignments = node->assigned_tasks[i];
         if (assignments.empty())
-          new_states[i] = _initial_states[i];
+          estimates[i] = _initial_states[i];
         else
-          new_states[i] = assignments.back().state;        
+          estimates[i] = assignments.back().state;        
       }
 
       if (_debug)
       {
         std::cout << "Updating node with states and requests: " << std::endl;
-        std::cout << "  *Initial States: wp soc finish_time" << std::endl;
-        for (std::size_t i = 0; i < new_states.size(); ++i)
+        std::cout << "  *Initial States: wp, soc, finish_time" << std::endl;
+        for (std::size_t i = 0; i < estimates.size(); ++i)
         {
-          const auto& state = new_states[i];
+          const auto& state = estimates[i];
           std::cout << "    " << i << " : " << state.waypoint << " , " 
                     <<  state.battery_soc * 100 <<  "% , "
                     <<  state.finish_time << "s" << std::endl;
@@ -1018,7 +1018,7 @@ public:
         std::cout << std::endl;
       }
 
-      node = make_initial_node(new_states, new_tasks);
+      node = make_initial_node(estimates, new_tasks);
     }
 
     return complete_assignments;
@@ -1204,7 +1204,6 @@ private:
     new_node->pop_unassigned(u.first);
 
     // Update states of unassigned tasks for the candidate
-    bool discard = false;
     for (auto& new_u : new_node->unassigned_tasks)
     {
       const auto finish =
@@ -1218,13 +1217,9 @@ private:
       }
       else
       {
-        discard = true;
-        break;
+        return nullptr;
       }
     }
-
-    if (discard)
-      return nullptr;
 
     // Update the cost estimate for new_node
     new_node->cost_estimate = compute_f(*new_node);
@@ -1263,13 +1258,11 @@ private:
     {
       auto new_node = std::make_shared<Node>(*parent);
       // Assign charging task to an agent
-      auto charging_task = _charge_battery;
       const auto& assignments = new_node->assigned_tasks[i];
       RobotState state;
       if (!assignments.empty())
       {
-        const auto& last_assignment = assignments.back();
-        state = last_assignment.state;
+        state = assignments.back().state;
       }
       else
       {
@@ -1278,19 +1271,19 @@ private:
       }
 
       bool discard = false;
-      auto new_state = charging_task->estimate_finish(state);
-      if (new_state.has_value())
+      auto estimate = _charge_battery->estimate_finish(state);
+      if (estimate.has_value())
       {
         new_node->assigned_tasks[i].push_back(
           Assignment{
-            charging_task->id(),
-            new_state.value().finish_state,
-            new_state.value().wait_until});
+            _charge_battery->id(),
+            estimate.value().finish_state,
+            estimate.value().wait_until});
 
         for (auto& new_u : new_node->unassigned_tasks)
         {
           const auto finish =
-            new_u.second.request->estimate_finish(new_state.value().finish_state);
+            new_u.second.request->estimate_finish(estimate.value().finish_state);
           if (finish.has_value())
           {
             new_u.second.candidates.update_candidate(
