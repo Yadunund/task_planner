@@ -1,5 +1,6 @@
 #include <rmf_tasks/requests/ChargeBattery.hpp>
 #include <rmf_tasks/requests/Delivery.hpp>
+#include <rmf_tasks/agv/State.hpp>
 
 #include "TaskAllocation.hpp"
 #include "ParseTasks.hpp"
@@ -8,8 +9,9 @@
 
 void print_solution (
   const Node::AssignedTasks& solution,
-  const std::vector<RobotState>& robot_states,
-  const std::vector<ConstTaskRequestPtr>& tasks)
+  const std::vector<rmf_tasks::agv::State>& robot_states,
+  const std::vector<rmf_tasks::Request::SharedPtr>& tasks,
+  rmf_traffic::Time relative_start_time)
 {
   std::cout << "Total agents: " << robot_states.size() <<std::endl;
   std::cout <<  "Total tasks: " << tasks.size() << std::endl;
@@ -19,8 +21,10 @@ void print_solution (
     std::cout << "Robot " << i << ":\n";
     for (const auto& a : solution[i])
     {
-      std::cout << " (" << a.task_id << ": " << a.state.finish_time 
-                << ", " << a.state.battery_soc * 100 << ")";
+      std::cout << " (" << a.task_id << ": " 
+        << rmf_traffic::time::to_seconds(
+          a.state.finish_time() - relative_start_time)
+        << ", " << a.state.battery_soc() * 100 << ")";
       std::cout << "\n";
     }
   }
@@ -92,24 +96,27 @@ int main(int argc, char* argv[])
     std::make_shared<SimpleDevicePowerSink>(battery_system, power_system);
 
   const bool drain_battery = true;
-  auto charge_battery_task = ChargeBatteryTaskRequest::make(
+  auto charge_battery_task = rmf_tasks::requests::ChargeBattery::make(
     battery_system, motion_sink, device_sink, planner, drain_battery);
   
-  std::vector<RobotState> robot_states;
-  std::vector<ConstTaskRequestPtr> tasks;
+  std::vector<rmf_tasks::agv::State> robot_states;
+  std::vector<rmf_tasks::Request::SharedPtr> tasks;
   
   for (auto agent : cfg.agents)
   {
     robot_states.push_back(
-      RobotState::make(agent.wp, agent.charging_wp));
+      rmf_tasks::agv::State(agent.wp, agent.charging_wp));
   }
 
+  auto begin_time = std::chrono::steady_clock::now();
+  
   for (auto tk : cfg.deliveries)
   {
     tasks.push_back(
-      DeliveryTaskRequest::make(
+      rmf_tasks::requests::Delivery::make(
         tk.id, tk.pickup, tk.dropoff, motion_sink,
-        device_sink, planner, drain_battery, tk.start_time));
+        device_sink, planner, drain_battery,
+        begin_time + rmf_traffic::time::from_seconds(tk.start_time)));
   };
 
   TaskPlanner task_planner(
@@ -120,7 +127,6 @@ int main(int argc, char* argv[])
     true
   );
 
-  auto begin_time = std::chrono::steady_clock::now();
   const auto solution = task_planner.complete_solve(false);
   auto end_time = std::chrono::steady_clock::now();
   double time_to_solve = rmf_traffic::time::to_seconds(
@@ -135,7 +141,7 @@ int main(int argc, char* argv[])
     std::cout << "No solution found!" << std::endl;
   }
 
-  print_solution(solution, robot_states, tasks);
+  print_solution(solution, robot_states, tasks, begin_time);
 
 
   // begin_time = std::chrono::steady_clock::now();
