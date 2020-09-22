@@ -1019,6 +1019,7 @@ public:
       }
 
       node = make_initial_node(estimates, new_tasks);
+      _initial_states = estimates;
     }
 
     return complete_assignments;
@@ -1035,7 +1036,7 @@ private:
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
-  std::vector<RobotState> _initial_states;
+  mutable std::vector<RobotState> _initial_states;
   std::vector<ConstTaskRequestPtr> _tasks;
 
   ConstNodePtr make_initial_node(
@@ -1267,6 +1268,7 @@ private:
       else
       {
         // We use the initial state of the robot
+        // BUG >>> This initial state is not updated. 
         state = _initial_states[i];
       }
 
