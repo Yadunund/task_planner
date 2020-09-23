@@ -922,6 +922,27 @@ public:
             if (!next_node || (n->cost_estimate < next_node->cost_estimate))
               next_node = std::move(n);
           }
+          else
+          {
+            // Assign charging task to robot with lowest battery soc
+            std::cout << "Adding charging task inside greedy_solve" << std::endl;
+            std::size_t agent = 0;
+            double max_finish_time = -std::numeric_limits<double>::infinity();
+            for (std::size_t i = 0; i < node->assigned_tasks.size(); ++i)
+            {
+              if (node->assigned_tasks[i].empty())
+                continue;
+              
+              if (node->assigned_tasks[i].back().state.finish_time > max_finish_time)
+              {
+                max_finish_time = node->assigned_tasks[i].back().state.finish_time;
+                agent = i;
+              }
+            }
+
+            if (auto n = expand_charger(node, agent))
+              next_node = std::move(n);           
+          }
         }
       }
 
@@ -934,6 +955,7 @@ public:
   Node::AssignedTasks complete_solve(bool greedy)
   {
 
+    auto backup_states = _initial_states;
     auto node = make_initial_node(_initial_states, _tasks);
 
     Node::AssignedTasks complete_assignments;
@@ -1021,6 +1043,8 @@ public:
       node = make_initial_node(estimates, new_tasks);
       _initial_states = estimates;
     }
+
+    _initial_states = backup_states;
 
     return complete_assignments;
 
@@ -1239,6 +1263,54 @@ private:
 
   }
 
+  ConstNodePtr expand_charger(ConstNodePtr parent, const std::size_t agent)
+  {
+    auto new_node = std::make_shared<Node>(*parent);
+    // Assign charging task to an agent
+    const auto& assignments = new_node->assigned_tasks[agent];
+    RobotState state;
+    if (!assignments.empty())
+    {
+      state = assignments.back().state;
+    }
+    else
+    {
+      // We use the initial state of the robot
+      state = _initial_states[agent];
+    }
+
+    auto estimate = _charge_battery->estimate_finish(state);
+    if (estimate.has_value())
+    {
+      new_node->assigned_tasks[agent].push_back(
+        Assignment{
+          _charge_battery->id(),
+          estimate.value().finish_state,
+          estimate.value().wait_until});
+
+      for (auto& new_u : new_node->unassigned_tasks)
+      {
+        const auto finish =
+          new_u.second.request->estimate_finish(estimate.value().finish_state);
+        if (finish.has_value())
+        {
+          new_u.second.candidates.update_candidate(
+            agent, finish.value().finish_state, finish.value().wait_until);
+        }
+        else
+        {
+          return nullptr;
+        }
+      }
+
+      new_node->cost_estimate = compute_f(*new_node);
+      new_node->latest_time = get_latest_time(*new_node);
+      return new_node;
+    }
+
+    return nullptr;
+  }
+
   std::vector<ConstNodePtr> expand(ConstNodePtr parent, Filter& filter)
   {
     std::vector<ConstNodePtr> new_nodes;
@@ -1257,54 +1329,8 @@ private:
     // Assign charging task to each robot
     for (std::size_t i = 0; i < parent->assigned_tasks.size(); ++i)
     {
-      auto new_node = std::make_shared<Node>(*parent);
-      // Assign charging task to an agent
-      const auto& assignments = new_node->assigned_tasks[i];
-      RobotState state;
-      if (!assignments.empty())
-      {
-        state = assignments.back().state;
-      }
-      else
-      {
-        // We use the initial state of the robot
-        // BUG >>> This initial state is not updated. 
-        state = _initial_states[i];
-      }
-
-      bool discard = false;
-      auto estimate = _charge_battery->estimate_finish(state);
-      if (estimate.has_value())
-      {
-        new_node->assigned_tasks[i].push_back(
-          Assignment{
-            _charge_battery->id(),
-            estimate.value().finish_state,
-            estimate.value().wait_until});
-
-        for (auto& new_u : new_node->unassigned_tasks)
-        {
-          const auto finish =
-            new_u.second.request->estimate_finish(estimate.value().finish_state);
-          if (finish.has_value())
-          {
-            new_u.second.candidates.update_candidate(
-              i, finish.value().finish_state, finish.value().wait_until);
-          }
-          else
-          {
-            discard = true;
-            break;
-          }
-        }
-
-        if (!discard)
-        {
-          new_node->cost_estimate = compute_f(*new_node);
-          new_node->latest_time = get_latest_time(*new_node);
-          new_nodes.push_back(std::move(new_node));
-        }
-      }
+      if (auto n = expand_charger(parent, i))
+        new_nodes.push_back(n);
     }
 
     return new_nodes;

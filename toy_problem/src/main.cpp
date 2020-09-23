@@ -22,6 +22,8 @@ void print_solution (
     }
   }
 
+  std::cout << "\n-------------------------------------------\n";
+
 }
 int main(int argc, char* argv[])
 { 
@@ -123,7 +125,6 @@ int main(int argc, char* argv[])
   double time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
 
-  std::cout << "\n-------------------------------------------\n";
   std::cout << "A* Solver: " << std::endl;
 
   std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
@@ -134,23 +135,21 @@ int main(int argc, char* argv[])
 
   print_solution(solution, robot_states, tasks);
 
+  begin_time = std::chrono::steady_clock::now();
+  const auto greedy_solution = task_planner.complete_solve(true);
+  end_time = std::chrono::steady_clock::now();
+  time_to_solve = rmf_traffic::time::to_seconds(
+    end_time - begin_time);
 
-  // begin_time = std::chrono::steady_clock::now();
-  // const auto greedy_solution = task_planner.complete_solve(true);
-  // end_time = std::chrono::steady_clock::now();
-  // time_to_solve = rmf_traffic::time::to_seconds(
-  //   end_time - begin_time);
+  std::cout << "Greedy Solver: " << std::endl;
 
-  // std::cout << "\n-------------------------------------------\n";
-  // std::cout << "Greedy Solver: " << std::endl;
-
-  // std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
-  // if (solution.empty())
-  // {
-  //   std::cout << "No solution found!" << std::endl;
-  //   return 0;
-  // }
-  // print_solution(greedy_solution, robot_states, tasks);
+  std::cout << "Time taken to solve: " << time_to_solve << " s" << std::endl;
+  if (solution.empty())
+  {
+    std::cout << "No solution found!" << std::endl;
+    return 0;
+  }
+  print_solution(greedy_solution, robot_states, tasks);
 
   write_allocation_config(allocation_config, solution);
 }
