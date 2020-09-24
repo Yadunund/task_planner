@@ -944,7 +944,7 @@ public:
             // segmentation or insufficient charge to complete task. For the 
             // later case, we assign a charging task to the agent
             if (node->latest_time + segmentation_threshold > it->second.wait_until)
-            {  
+            {
               const auto charge_node = expand_charger(node, it->second.candidate);
               if (charge_node)
               {
@@ -973,7 +973,7 @@ public:
                     auto& assignments = parent_node->assigned_tasks[it->second.candidate];
                     assignments.pop_back();
                     auto new_charge_node = expand_charger(parent_node, it->second.candidate);
-                    if (new_charge_node || it->second.state.battery_soc > 99)
+                    if (new_charge_node)
                     {
                       next_node = std::move(new_charge_node);
                       break;
