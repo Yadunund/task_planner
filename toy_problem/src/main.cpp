@@ -116,7 +116,7 @@ int main(int argc, char* argv[])
     robot_states,
     charge_battery_task,
     Filter::Type::Hash,
-    true
+    false
   );
 
   auto begin_time = std::chrono::steady_clock::now();
@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
   {
     std::cout << "No solution found!" << std::endl;
   }
-
+  std::cout << "Cost: " << task_planner.compute_g(solution) << std::endl;
   print_solution(solution, robot_states, tasks);
 
   begin_time = std::chrono::steady_clock::now();
@@ -149,6 +149,7 @@ int main(int argc, char* argv[])
     std::cout << "No solution found!" << std::endl;
     return 0;
   }
+  std::cout << "Cost: " << task_planner.compute_g(greedy_solution) << std::endl;
   print_solution(greedy_solution, robot_states, tasks);
 
   write_allocation_config(allocation_config, solution);

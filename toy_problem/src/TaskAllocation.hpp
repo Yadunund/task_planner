@@ -23,7 +23,6 @@
 #include <unordered_map>
 #include <map>
 #include <iostream>
-#include <iomanip>
 #include <limits>
 #include <cstdlib>
 #include <cassert>
@@ -826,6 +825,20 @@ public:
 
   }
 
+  double compute_g(const Node::AssignedTasks& assigned_tasks)
+  {
+    double cost = 0.0;
+    for (const auto& agent : assigned_tasks)
+    {
+      for (const auto& assignment : agent)
+      {
+        cost += assignment.state.finish_time - assignment.earliest_start_time;
+      }
+    }
+
+    return cost;
+  }
+
   ConstNodePtr solve(
     ConstNodePtr initial_node)
   {
@@ -885,7 +898,7 @@ public:
           std::cout << "  Agent: " << i << std::endl;
           for (const auto& assignment : top->assigned_tasks[i])
           {
-            std::cout << std::setprecision(4) << "    " << assignment.task_id 
+            std::cout << "    " << assignment.task_id 
                       << " : " << 100 * assignment.state.battery_soc 
                       << "% at time " << assignment.state.finish_time << "s" 
                       << std::endl;
@@ -918,8 +931,7 @@ public:
         const auto& range = u.second.candidates.best_candidates();
         for (auto it = range.begin; it != range.end; ++it)
         {
-          auto n = expand_candidate(it, u, node, nullptr);
-          if (n)
+          if (auto n = expand_candidate(it, u, node, nullptr))
           {
             if (!next_node || (n->cost_estimate < next_node->cost_estimate))
               {
@@ -929,30 +941,47 @@ public:
           else
           {
             // expand_candidate returned nullptr either due to start time
-            // segmentation or insufficient charge to complete task. For both 
-            // cases, we assign a charging task to the agent
-            const auto charge_node = expand_charger(node, it->second.candidate);
-            if (charge_node)
-            {
-              next_node = std::move(charge_node);
-            }
-            else
-            {
-              // agent has insufficient charge to reach its charger. So we pop
-              // assigned task until we can make it to the charger
-              auto parent_node = std::make_shared<Node>(*node);
-              while (!parent_node->assigned_tasks[it->second.candidate].empty())
+            // segmentation or insufficient charge to complete task. For the 
+            // later case, we assign a charging task to the agent
+            if (node->latest_time + segmentation_threshold > it->second.wait_until)
+            {  
+              const auto charge_node = expand_charger(node, it->second.candidate);
+              if (charge_node)
               {
-                auto& assignments = parent_node->assigned_tasks[it->second.candidate];
-                assignments.pop_back();
-                auto new_charge_node = expand_charger(parent_node, it->second.candidate);
-                if (new_charge_node)
-                {
-                  next_node = std::move(new_charge_node);
-                  break;
-                }
+                next_node = std::move(charge_node);
               }
-            }                      
+              else
+              {
+                // agent has either full battery or insufficient charge to reach 
+                // its charger. If later, we pop assigned task until
+                // we can make it to the charger
+                auto parent_node = std::make_shared<Node>(*node);
+                RobotState state;
+                if (parent_node->assigned_tasks[it->second.candidate].empty())
+                {
+                  state = _initial_states[it->second.candidate];
+                }
+                else
+                {
+                  state = parent_node->assigned_tasks[it->second.candidate].back().state;
+                }
+                
+                if (state.battery_soc < 0.99)
+                {
+                  while (!parent_node->assigned_tasks[it->second.candidate].empty())
+                  {
+                    auto& assignments = parent_node->assigned_tasks[it->second.candidate];
+                    assignments.pop_back();
+                    auto new_charge_node = expand_charger(parent_node, it->second.candidate);
+                    if (new_charge_node || it->second.state.battery_soc > 99)
+                    {
+                      next_node = std::move(new_charge_node);
+                      break;
+                    }
+                  }
+                }
+              } 
+            }
           }
         }
       }
@@ -1142,20 +1171,6 @@ private:
     return latest;
   }
 
-  double compute_g(const Node::AssignedTasks& assigned_tasks)
-  {
-    double cost = 0.0;
-    for (const auto& agent : assigned_tasks)
-    {
-      for (const auto& assignment : agent)
-      {
-        cost += assignment.state.finish_time - assignment.earliest_start_time;
-      }
-    }
-
-    return cost;
-  }
-
   double compute_g(const Node& node)
   {
     return compute_g(node.assigned_tasks);
@@ -1266,9 +1281,12 @@ private:
     // Apply filter
     if (filter && filter->ignore(*new_node))
     {
-      std::cout << "Ignoring node: " << std::endl;
-      print_node(*new_node);
-      std::cout << "==============================================" << std::endl;
+      if (_debug)
+      {
+        std::cout << "Ignoring node: " << std::endl;
+        print_node(*new_node);
+        std::cout << "==============================================" << std::endl;
+      }
       return nullptr;
     }
 
