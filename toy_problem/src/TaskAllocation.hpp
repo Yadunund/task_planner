@@ -810,18 +810,13 @@ public:
   using BatterySystem = rmf_battery::agv::BatterySystem;
 
   TaskPlanner(
-    std::vector<ConstTaskRequestPtr> tasks,
-    std::vector<RobotState> initial_states,
     ConstTaskRequestPtr charge_battery,
     const Filter::Type filter_type,
     const bool debug)
   : _charge_battery(charge_battery),
     _filter_type(filter_type),
-    _debug(debug),
-    _initial_states(initial_states),
-    _tasks(tasks)
+    _debug(debug)
   {
-    _num_tasks = tasks.size();
 
   }
 
@@ -840,13 +835,15 @@ public:
   }
 
   ConstNodePtr solve(
-    ConstNodePtr initial_node)
+    ConstNodePtr initial_node,
+    const std::vector<RobotState> initial_states,
+    const std::size_t num_tasks)
   {
     const auto start = std::chrono::steady_clock::now();
     _priority_queue = PriorityQueue{};
     _priority_queue.push(std::move(initial_node));
 
-    Filter filter{_filter_type, _num_tasks};
+    Filter filter{_filter_type, num_tasks};
     _total_queue_entries = 1;
     _total_queue_expansions = 0;
     ConstNodePtr top = nullptr;
@@ -908,7 +905,7 @@ public:
       }
 
       // Apply possible actions to expand the node
-      const auto new_nodes = expand(top, filter);
+      const auto new_nodes = expand(top, filter, initial_states);
       ++_total_queue_expansions;
       _total_queue_entries += new_nodes.size();
 
@@ -921,7 +918,9 @@ public:
     return nullptr;
   }
 
-  ConstNodePtr greedy_solve(ConstNodePtr node)
+  ConstNodePtr greedy_solve(
+    ConstNodePtr node,
+    const std::vector<RobotState> initial_states)
   {
     while (!finished(*node))
     {
@@ -945,7 +944,8 @@ public:
             // later case, we assign a charging task to the agent
             if (node->latest_time + segmentation_threshold > it->second.wait_until)
             {
-              const auto charge_node = expand_charger(node, it->second.candidate);
+              const auto charge_node = expand_charger(
+                node, it->second.candidate, initial_states);
               if (charge_node)
               {
                 next_node = std::move(charge_node);
@@ -959,7 +959,7 @@ public:
                 RobotState state;
                 if (parent_node->assigned_tasks[it->second.candidate].empty())
                 {
-                  state = _initial_states[it->second.candidate];
+                  state = initial_states[it->second.candidate];
                 }
                 else
                 {
@@ -972,7 +972,8 @@ public:
                   {
                     auto& assignments = parent_node->assigned_tasks[it->second.candidate];
                     assignments.pop_back();
-                    auto new_charge_node = expand_charger(parent_node, it->second.candidate);
+                    auto new_charge_node = expand_charger(
+                      parent_node, it->second.candidate, initial_states);
                     if (new_charge_node)
                     {
                       next_node = std::move(new_charge_node);
@@ -994,27 +995,23 @@ public:
     return node;
   }
 
-  Node::AssignedTasks complete_solve(bool greedy)
+  Node::AssignedTasks complete_solve(
+    std::vector<RobotState> initial_states,
+    std::vector<ConstTaskRequestPtr> tasks,
+    bool greedy)
   {
 
-    auto backup_states = _initial_states;
-    auto node = make_initial_node(_initial_states, _tasks);
+    auto node = make_initial_node(initial_states, tasks);
 
     Node::AssignedTasks complete_assignments;
     complete_assignments.resize(node->assigned_tasks.size());
 
-    std::unordered_map<std::size_t, std::size_t> task_id_map;
-    // for (std::size_t i = 0; i < _tasks.size(); ++i)
-    //   task_id_map[i] = _tasks[i]->id();
-    // // Add charging task id
-    // task_id_map[task_id_map.size()] = _charge_battery->id();
-
     while (node)
     {
       if (greedy)
-        node = greedy_solve(node);
+        node = greedy_solve(node, initial_states);
       else
-        node = solve(node);
+        node = solve(node, initial_states, tasks.size());
 
       if (!node)
       {
@@ -1058,7 +1055,7 @@ public:
       {
         const auto& assignments = node->assigned_tasks[i];
         if (assignments.empty())
-          estimates[i] = _initial_states[i];
+          estimates[i] = initial_states[i];
         else
           estimates[i] = assignments.back().state;        
       }
@@ -1083,10 +1080,8 @@ public:
       }
 
       node = make_initial_node(estimates, new_tasks);
-      _initial_states = estimates;
+      initial_states = estimates;
     }
-
-    _initial_states = backup_states;
 
     return complete_assignments;
 
@@ -1097,13 +1092,10 @@ private:
   std::size_t _total_queue_expansions = 0;
 
   ConstTaskRequestPtr _charge_battery;
-  std::size_t _num_tasks;
   Filter::Type _filter_type;
   bool _debug;
   Node _goal_node;
   PriorityQueue _priority_queue;
-  mutable std::vector<RobotState> _initial_states;
-  std::vector<ConstTaskRequestPtr> _tasks;
 
   ConstNodePtr make_initial_node(
     std::vector<RobotState> initial_states,
@@ -1294,7 +1286,10 @@ private:
 
   }
 
-  ConstNodePtr expand_charger(ConstNodePtr parent, const std::size_t agent)
+  ConstNodePtr expand_charger(
+    ConstNodePtr parent,
+    const std::size_t agent,
+    const std::vector<RobotState> initial_states)
   {
     auto new_node = std::make_shared<Node>(*parent);
     // Assign charging task to an agent
@@ -1307,7 +1302,7 @@ private:
     else
     {
       // We use the initial state of the robot
-      state = _initial_states[agent];
+      state = initial_states[agent];
     }
 
     auto estimate = _charge_battery->estimate_finish(state);
@@ -1342,7 +1337,10 @@ private:
     return nullptr;
   }
 
-  std::vector<ConstNodePtr> expand(ConstNodePtr parent, Filter& filter)
+  std::vector<ConstNodePtr> expand(
+    ConstNodePtr parent,
+    Filter& filter,
+    const std::vector<RobotState> initial_states)
   {
     std::vector<ConstNodePtr> new_nodes;
     new_nodes.reserve(
@@ -1360,7 +1358,7 @@ private:
     // Assign charging task to each robot
     for (std::size_t i = 0; i < parent->assigned_tasks.size(); ++i)
     {
-      if (auto n = expand_charger(parent, i))
+      if (auto n = expand_charger(parent, i, initial_states))
         new_nodes.push_back(n);
     }
 

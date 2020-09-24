@@ -112,15 +112,13 @@ int main(int argc, char* argv[])
   };
 
   TaskPlanner task_planner(
-    tasks,
-    robot_states,
     charge_battery_task,
     Filter::Type::Hash,
     false
   );
 
   auto begin_time = std::chrono::steady_clock::now();
-  const auto solution = task_planner.complete_solve(false);
+  const auto solution = task_planner.complete_solve(robot_states, tasks, false);
   auto end_time = std::chrono::steady_clock::now();
   double time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
@@ -136,7 +134,8 @@ int main(int argc, char* argv[])
   print_solution(solution, robot_states, tasks);
 
   begin_time = std::chrono::steady_clock::now();
-  const auto greedy_solution = task_planner.complete_solve(true);
+  const auto greedy_solution = task_planner.complete_solve(
+    robot_states, tasks, true);
   end_time = std::chrono::steady_clock::now();
   time_to_solve = rmf_traffic::time::to_seconds(
     end_time - begin_time);
