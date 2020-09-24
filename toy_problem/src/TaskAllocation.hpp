@@ -579,6 +579,7 @@ struct Node
       {
         popped_invariant = true;
         unassigned_invariants.erase(it);
+        break;
       }
     }
 
