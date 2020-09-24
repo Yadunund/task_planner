@@ -911,36 +911,41 @@ public:
   {
     while (!finished(*node))
     {
+      ConstNodePtr parent_node = std::make_shared<Node>(*node);
       ConstNodePtr next_node = nullptr;
       for (const auto& u : node->unassigned_tasks)
       {
         const auto& range = u.second.candidates.best_candidates();
         for (auto it = range.begin; it != range.end; ++it)
         {
+          
           if (auto n = expand_candidate(it, u, node, nullptr))
           {
             if (!next_node || (n->cost_estimate < next_node->cost_estimate))
-              next_node = std::move(n);
+              {
+                next_node = std::move(n);
+                parent_node = std::make_shared<Node>(*node);
+              }
           }
           else
           {
             // Assign charging task to robot with lowest battery soc
             std::cout << "Adding charging task inside greedy_solve" << std::endl;
             std::size_t agent = 0;
-            double max_finish_time = -std::numeric_limits<double>::infinity();
-            for (std::size_t i = 0; i < node->assigned_tasks.size(); ++i)
+            double max_battery_soc = -std::numeric_limits<double>::infinity();
+            for (std::size_t i = 0; i < parent_node->assigned_tasks.size(); ++i)
             {
-              if (node->assigned_tasks[i].empty())
+              if (parent_node->assigned_tasks[i].empty())
                 continue;
               
-              if (node->assigned_tasks[i].back().state.finish_time > max_finish_time)
+              if (parent_node->assigned_tasks[i].back().state.battery_soc > max_battery_soc)
               {
-                max_finish_time = node->assigned_tasks[i].back().state.finish_time;
+                max_battery_soc = parent_node->assigned_tasks[i].back().state.battery_soc;
                 agent = i;
               }
             }
 
-            if (auto n = expand_charger(node, agent))
+            if (auto n = expand_charger(parent_node, agent))
               next_node = std::move(n);           
           }
         }
