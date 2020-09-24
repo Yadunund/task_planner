@@ -912,47 +912,54 @@ public:
   {
     while (!finished(*node))
     {
-      ConstNodePtr parent_node = std::make_shared<Node>(*node);
       ConstNodePtr next_node = nullptr;
       for (const auto& u : node->unassigned_tasks)
       {
         const auto& range = u.second.candidates.best_candidates();
         for (auto it = range.begin; it != range.end; ++it)
         {
-          
-          if (auto n = expand_candidate(it, u, node, nullptr))
+          auto n = expand_candidate(it, u, node, nullptr);
+          if (n)
           {
             if (!next_node || (n->cost_estimate < next_node->cost_estimate))
               {
                 next_node = std::move(n);
-                parent_node = std::make_shared<Node>(*node);
               }
           }
           else
           {
-            // Assign charging task to robot with lowest battery soc
-            std::cout << "Adding charging task inside greedy_solve" << std::endl;
-            std::size_t agent = 0;
-            double max_battery_soc = -std::numeric_limits<double>::infinity();
-            for (std::size_t i = 0; i < parent_node->assigned_tasks.size(); ++i)
+            // expand_candidate returned nullptr either due to start time
+            // segmentation or insufficient charge to complete task. For both 
+            // cases, we assign a charging task to the agent
+            const auto charge_node = expand_charger(node, it->second.candidate);
+            if (charge_node)
             {
-              if (parent_node->assigned_tasks[i].empty())
-                continue;
-              
-              if (parent_node->assigned_tasks[i].back().state.battery_soc > max_battery_soc)
-              {
-                max_battery_soc = parent_node->assigned_tasks[i].back().state.battery_soc;
-                agent = i;
-              }
+              next_node = std::move(charge_node);
             }
-
-            if (auto n = expand_charger(parent_node, agent))
-              next_node = std::move(n);           
+            else
+            {
+              // agent has insufficient charge to reach its charger. So we pop
+              // assigned task until we can make it to the charger
+              auto parent_node = std::make_shared<Node>(*node);
+              while (!parent_node->assigned_tasks[it->second.candidate].empty())
+              {
+                auto& assignments = parent_node->assigned_tasks[it->second.candidate];
+                assignments.pop_back();
+                auto new_charge_node = expand_charger(parent_node, it->second.candidate);
+                if (new_charge_node)
+                {
+                  next_node = std::move(new_charge_node);
+                  break;
+                }
+              }
+            }                      
           }
         }
       }
 
       node = next_node;
+      if (!node)
+        std::cout << "Node is nullptr. Expect segfault" <<std::endl;
     }
 
     return node;
