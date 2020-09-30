@@ -571,16 +571,18 @@ struct Node
     unassigned_tasks.erase(task_id);
 
     bool popped_invariant = false;
+    InvariantSet::iterator erase_it;
     for (auto it = unassigned_invariants.begin();
          it != unassigned_invariants.end(); ++it)
     {
       if (it->task_id == task_id)
       {
         popped_invariant = true;
-        unassigned_invariants.erase(it);
+        erase_it = it;
         break;
       }
     }
+    unassigned_invariants.erase(erase_it);
 
     assert(popped_invariant);
   }
@@ -1242,6 +1244,7 @@ private:
     auto new_node = std::make_shared<Node>(*parent);
 
     // Assign the unassigned task
+    bool add_charger = false;
     new_node->assigned_tasks[entry.candidate].push_back(
       Assignment{u.first, entry.state, u.second.earliest_start_time});
     
@@ -1262,8 +1265,48 @@ private:
       }
       else
       {
+        add_charger = true;
+        break;
+        // return nullptr;
+
+      }
+    }
+
+    if (add_charger)
+    {
+      auto battery_estimate = _charge_battery->estimate_finish(entry.state);
+      if (battery_estimate.has_value())
+      {
+        new_node->assigned_tasks[entry.candidate].push_back(
+          Assignment
+          {
+            _charge_battery->id(),
+            battery_estimate.value().finish_state,
+            battery_estimate.value().wait_until
+          });
+        for (auto& new_u : new_node->unassigned_tasks)
+        {
+          const auto finish =
+            new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+          if (finish.has_value())
+          {
+            new_u.second.candidates.update_candidate(
+              entry.candidate, finish.value().finish_state, finish.value().wait_until);
+          }
+          else
+          {
+            // we should stop expanding this node
+            return nullptr;
+          }
+        }
+        
+      }
+      else
+      {
+        // agent cannot make it back to the charger
         return nullptr;
       }
+      
     }
 
     // Update the cost estimate for new_node
