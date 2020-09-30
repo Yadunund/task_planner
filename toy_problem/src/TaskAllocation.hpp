@@ -1272,7 +1272,7 @@ private:
       }
     }
 
-    if (add_charger)
+    if (add_charger && new_node->unassigned_tasks.size() > 1)
     {
       auto battery_estimate = _charge_battery->estimate_finish(entry.state);
       if (battery_estimate.has_value())
