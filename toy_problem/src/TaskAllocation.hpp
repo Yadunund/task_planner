@@ -1265,49 +1265,49 @@ private:
       }
       else
       {
-        add_charger = true;
-        break;
-        // return nullptr;
-
-      }
-    }
-
-    if (add_charger)
-    {
-      auto battery_estimate = _charge_battery->estimate_finish(entry.state);
-      if (battery_estimate.has_value())
-      {
-        new_node->assigned_tasks[entry.candidate].push_back(
-          Assignment
-          {
-            _charge_battery->id(),
-            battery_estimate.value().finish_state,
-            battery_estimate.value().wait_until
-          });
-        for (auto& new_u : new_node->unassigned_tasks)
-        {
-          const auto finish =
-            new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
-          if (finish.has_value())
-          {
-            new_u.second.candidates.update_candidate(
-              entry.candidate, finish.value().finish_state, finish.value().wait_until);
-          }
-          else
-          {
-            // we should stop expanding this node
-            return nullptr;
-          }
-        }
-        
-      }
-      else
-      {
-        // agent cannot make it back to the charger
+        // add_charger = true;
+        // break;
         return nullptr;
+
       }
-      
     }
+
+    // if (add_charger)
+    // {
+    //   auto battery_estimate = _charge_battery->estimate_finish(entry.state);
+    //   if (battery_estimate.has_value())
+    //   {
+    //     new_node->assigned_tasks[entry.candidate].push_back(
+    //       Assignment
+    //       {
+    //         _charge_battery->id(),
+    //         battery_estimate.value().finish_state,
+    //         battery_estimate.value().wait_until
+    //       });
+    //     for (auto& new_u : new_node->unassigned_tasks)
+    //     {
+    //       const auto finish =
+    //         new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+    //       if (finish.has_value())
+    //       {
+    //         new_u.second.candidates.update_candidate(
+    //           entry.candidate, finish.value().finish_state, finish.value().wait_until);
+    //       }
+    //       else
+    //       {
+    //         // we should stop expanding this node
+    //         return nullptr;
+    //       }
+    //     }
+        
+    //   }
+    //   else
+    //   {
+    //     // agent cannot make it back to the charger
+    //     return nullptr;
+    //   }
+      
+    // }
 
     // Update the cost estimate for new_node
     new_node->cost_estimate = compute_f(*new_node);
