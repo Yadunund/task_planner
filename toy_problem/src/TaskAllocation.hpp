@@ -419,7 +419,8 @@ public:
 
   static Candidates make(
       const std::vector<RobotState>& initial_states,
-      const TaskRequest& request);
+      const TaskRequest& request,
+      const TaskRequest& charge_battery);
 
   Candidates(const Candidates& other)
   {
@@ -493,16 +494,19 @@ private:
     {
       const auto c = it->second.candidate;
       if (_candidate_map.size() <= c)
-        _candidate_map.resize(c+1);
+        _candidate_map.resize(c+1, _value_map.end());
 
       _candidate_map[c] = it;
     }
+    for (const auto& it : _candidate_map)
+      assert(it != _value_map.end());
   }
 };
 
 Candidates Candidates::make(
     const std::vector<RobotState>& initial_states,
-    const TaskRequest& request)
+    const TaskRequest& request,
+    const TaskRequest& charge_battery)
 {
   Map initial_map;
   for (std::size_t i = 0; i < initial_states.size(); ++i)
@@ -515,6 +519,25 @@ Candidates Candidates::make(
         {finish.value().finish_state.finish_time,
         Entry{i, finish.value().finish_state, finish.value().wait_until}});
     }
+    else
+    {
+      auto battery_estimate = charge_battery.estimate_finish(state);
+        if (battery_estimate.has_value())
+        {
+          auto new_finish = request.estimate_finish(battery_estimate.value().finish_state);
+          assert(new_finish.has_value());
+          initial_map.insert(
+            {new_finish.value().finish_state.finish_time,
+            Entry{i, new_finish.value().finish_state, new_finish.value().wait_until}});
+        }
+        else
+        {
+          std::cout << "Cannot accommodate request: " << request.id() << std::endl;
+          assert(false);
+        }
+        
+    }
+    
   }
 
   return Candidates(std::move(initial_map));
@@ -525,9 +548,10 @@ struct PendingTask
 {
   PendingTask(
       std::vector<RobotState> initial_states,
-      ConstTaskRequestPtr request_)
+      ConstTaskRequestPtr request_,
+      ConstTaskRequestPtr charge_battery)
     : request(std::move(request_)),
-      candidates(Candidates::make(initial_states, *request)),
+      candidates(Candidates::make(initial_states, *request, *charge_battery)),
       earliest_start_time(request->earliest_start_time())
   {
     // Do nothing
@@ -1134,7 +1158,7 @@ private:
     for (const auto& task : tasks)
     {
       initial_node->unassigned_tasks.insert(
-        {task->id(), PendingTask(initial_states, task)});
+        {task->id(), PendingTask(initial_states, task, _charge_battery)});
     }
 
     initial_node->cost_estimate = compute_f(*initial_node);
@@ -1458,16 +1482,16 @@ private:
     // Assign charging task to each robot
     for (std::size_t i = 0; i < parent->assigned_tasks.size(); ++i)
     {
-      if (!parent->assigned_tasks[i].empty() )
-     {
-       auto n = expand_charger(parent, i, initial_states);
-       if (n)
-         new_nodes.push_back(n);
-      }
+    //   if (!parent->assigned_tasks[i].empty())
+    //  {
+    //    auto n = expand_charger(parent, i, initial_states);
+    //    if (n)
+    //      new_nodes.push_back(n);
+    //   }
 
-      // auto n = expand_charger(parent, i, initial_states);
-      // if (n)
-      //   new_nodes.push_back(n);
+      auto n = expand_charger(parent, i, initial_states);
+      if (n)
+        new_nodes.push_back(n);
     }
 
     return new_nodes;
