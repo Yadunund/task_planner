@@ -469,6 +469,7 @@ public:
     std::size_t candidate, RobotState state, double wait_until)
   {
     const auto it = _candidate_map.at(candidate);
+    std::cout << "Erasing iterator of candidate " << candidate << "/" << _candidate_map.size() << std::endl;
     assert(_value_map.find(it->first) != _value_map.end());
     _value_map.erase(it);
     _candidate_map[candidate] = _value_map.insert(
@@ -1131,8 +1132,10 @@ private:
     initial_node->assigned_tasks.resize(initial_states.size());
 
     for (const auto& task : tasks)
+    {
       initial_node->unassigned_tasks.insert(
         {task->id(), PendingTask(initial_states, task)});
+    }
 
     initial_node->cost_estimate = compute_f(*initial_node);
 
@@ -1274,7 +1277,7 @@ private:
     new_node->pop_unassigned(u.first);
 
     // Update states of unassigned tasks for the candidate
-    bool add_charger = false;
+    // bool add_charger = false;
     for (auto& new_u : new_node->unassigned_tasks)
     {
       const auto finish =
@@ -1303,6 +1306,7 @@ private:
         }
         else
         {
+          // unable to reach charger
           return nullptr;
         }
         
@@ -1373,22 +1377,20 @@ private:
   {
     auto new_node = std::make_shared<Node>(*parent);
     // Assign charging task to an agent
-    const auto& assignments = new_node->assigned_tasks[agent];
-    RobotState state;
+    RobotState state = initial_states[agent];
+    auto& assignments = new_node->assigned_tasks[agent];
+
     if (!assignments.empty())
     {
+      if (assignments.back().task_id == _charge_battery->id())
+        return nullptr;
       state = assignments.back().state;
     }
-    else
-    {
-      // We use the initial state of the robot
-      state = initial_states[agent];
-    }
 
-    auto estimate = _charge_battery->estimate_finish(state);
+    const auto estimate = _charge_battery->estimate_finish(state);
     if (estimate.has_value())
     {
-      new_node->assigned_tasks[agent].push_back(
+      assignments.push_back(
         Assignment{
           _charge_battery->id(),
           estimate.value().finish_state,
@@ -1405,7 +1407,24 @@ private:
         }
         else
         {
-          return nullptr;
+          // return nullptr;
+
+          const auto battery_estimate = _charge_battery->estimate_finish(estimate.value().finish_state);
+          if (battery_estimate.has_value())
+          {
+            auto new_finish = new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+            assert(new_finish.has_value());
+            new_u.second.candidates.update_candidate(
+              agent,
+              new_finish.value().finish_state,
+              new_finish.value().wait_until);
+          }
+          else
+          {
+            // unable to reach charger
+            return nullptr;
+          }
+
         }
       }
 
@@ -1439,15 +1458,16 @@ private:
     // Assign charging task to each robot
     for (std::size_t i = 0; i < parent->assigned_tasks.size(); ++i)
     {
-      if (!parent->assigned_tasks[i].empty() && parent->assigned_tasks[i].back().task_id != _charge_battery->id())
-      {
-        auto n = expand_charger(parent, i, initial_states);
-        if (n)
-          new_nodes.push_back(n);
-       }
+      if (!parent->assigned_tasks[i].empty() )
+     {
+       auto n = expand_charger(parent, i, initial_states);
+       if (n)
+         new_nodes.push_back(n);
+      }
+
       // auto n = expand_charger(parent, i, initial_states);
-      //   if (n)
-      //     new_nodes.push_back(n);
+      // if (n)
+      //   new_nodes.push_back(n);
     }
 
     return new_nodes;
