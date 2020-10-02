@@ -470,7 +470,7 @@ public:
     std::size_t candidate, RobotState state, double wait_until)
   {
     const auto it = _candidate_map.at(candidate);
-    std::cout << "Erasing iterator of candidate " << candidate << "/" << _candidate_map.size() << std::endl;
+    // std::cout << "Erasing iterator of candidate " << candidate << "/" << _candidate_map.size() << std::endl;
     assert(_value_map.find(it->first) != _value_map.end());
     _value_map.erase(it);
     _candidate_map[candidate] = _value_map.insert(
@@ -1431,23 +1431,23 @@ private:
         }
         else
         {
-          // return nullptr;
+          return nullptr;
 
-          const auto battery_estimate = _charge_battery->estimate_finish(estimate.value().finish_state);
-          if (battery_estimate.has_value())
-          {
-            auto new_finish = new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
-            assert(new_finish.has_value());
-            new_u.second.candidates.update_candidate(
-              agent,
-              new_finish.value().finish_state,
-              new_finish.value().wait_until);
-          }
-          else
-          {
-            // unable to reach charger
-            return nullptr;
-          }
+          // const auto battery_estimate = _charge_battery->estimate_finish(estimate.value().finish_state);
+          // if (battery_estimate.has_value())
+          // {
+          //   auto new_finish = new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+          //   assert(new_finish.has_value());
+          //   new_u.second.candidates.update_candidate(
+          //     agent,
+          //     new_finish.value().finish_state,
+          //     new_finish.value().wait_until);
+          // }
+          // else
+          // {
+          //   // unable to reach charger
+          //   return nullptr;
+          // }
 
         }
       }
