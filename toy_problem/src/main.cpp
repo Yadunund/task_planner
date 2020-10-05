@@ -16,7 +16,7 @@ void print_solution (
     std::cout << "Robot " << i << ":\n";
     for (const auto& a : solution[i])
     {
-      std::cout << " (" << a.task_id << ": " << a.state.finish_time 
+      std::cout << " (" << a.task_id << ": " << a.earliest_start_time<< ", " << a.state.finish_time 
                 << ", " << a.state.battery_soc * 100 << ")";
       std::cout << "\n";
     }

@@ -133,11 +133,11 @@ public:
 
     // TODO: should we consider adding a cost to the finish_time instead of 
     // returning nullopt here?
-    if (abs(initial_state.battery_soc - _charge_soc) < 1e-3)
-    {
-      std::cout << " -- Charge battery: Battery full" << std::endl;
-      return rmf_utils::nullopt;
-    }
+    // if (abs(initial_state.battery_soc - _charge_soc) < 1e-3)
+    // {
+    //   std::cout << " -- Charge battery: Battery full" << std::endl;
+    //   return rmf_utils::nullopt;
+    // }
 
     auto state = initial_state;
 
@@ -1020,8 +1020,7 @@ public:
       }
 
       node = next_node;
-      if (!node)
-        std::cout << "Node is nullptr. Expect segfault" <<std::endl;
+      assert(node);
     }
 
     return node;
@@ -1067,8 +1066,8 @@ public:
       }
 
       if (node->unassigned_tasks.empty())
-        // return prune_assignments(complete_assignments);
-        return complete_assignments;
+        return correct_assignments(complete_assignments);
+        // return complete_assignments;
 
       // std::unordered_map<std::size_t, std::size_t> new_task_id_map;
       std::vector<ConstTaskRequestPtr> new_tasks;
@@ -1130,21 +1129,45 @@ private:
   Node _goal_node;
   PriorityQueue _priority_queue;
 
-  Node::AssignedTasks prune_assignments(const Node::AssignedTasks& assignments)
+  Node::AssignedTasks correct_assignments(
+    Node::AssignedTasks& assignments)
   {
-    auto pruned = assignments;
-    for (auto& agent : pruned)
+    for (std::size_t a = 0; a < assignments.size(); ++a)
     {
-      if (agent.empty())
+      if (assignments[a].empty())
         continue;
       
-      if (agent.back().task_id == _charge_battery->id())
+      // Remove charging task at end of assignments if any
+      if (assignments[a].back().task_id == _charge_battery->id())
+        assignments[a].pop_back();
+
+      // Insert missing charging tasks if any
+      if (assignments[a].size() > 1)
       {
-        agent.pop_back();
+        auto it = ++assignments[a].begin();
+        for (; it != assignments[a].end(); ++it)
+        {
+          auto prev_it = it; --prev_it;
+          if (it->state.battery_soc > prev_it->state.battery_soc && 
+            it->task_id != _charge_battery->id())
+          {
+            auto estimate = _charge_battery->estimate_finish(
+              prev_it->state);
+            assert(estimate.has_value());
+            assignments[a].insert(
+              it,
+              Assignment
+              {
+                _charge_battery->id(),
+                estimate.value().finish_state,
+                estimate.value().wait_until
+              });
+          }
+        }
       }
     }
 
-    return pruned;
+    return assignments;
   }
 
   ConstNodePtr make_initial_node(
@@ -1301,7 +1324,7 @@ private:
     new_node->pop_unassigned(u.first);
 
     // Update states of unassigned tasks for the candidate
-    // bool add_charger = false;
+    bool add_charger = false;
     for (auto& new_u : new_node->unassigned_tasks)
     {
       const auto finish =
@@ -1315,64 +1338,64 @@ private:
       }
       else
       {
-        // add_charger = true;
-        // break;
+        add_charger = true;
+        break;
         // return nullptr;
-        auto battery_estimate = _charge_battery->estimate_finish(entry.state);
-        if (battery_estimate.has_value())
-        {
-          auto new_finish = new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
-          assert(new_finish.has_value());
-          new_u.second.candidates.update_candidate(
-            entry.candidate,
-            new_finish.value().finish_state,
-            new_finish.value().wait_until);
-        }
-        else
-        {
-          // unable to reach charger
-          return nullptr;
-        }
+        // auto battery_estimate = _charge_battery->estimate_finish(entry.state);
+        // if (battery_estimate.has_value())
+        // {
+        //   auto new_finish = new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+        //   assert(new_finish.has_value());
+        //   new_u.second.candidates.update_candidate(
+        //     entry.candidate,
+        //     new_finish.value().finish_state,
+        //     new_finish.value().wait_until);
+        // }
+        // else
+        // {
+        //   // unable to reach charger
+        //   return nullptr;
+        // }
         
       }
     }
 
-    // if (add_charger && (parent->latest_time + segmentation_threshold > entry.wait_until))
-    // {
-    //   auto battery_estimate = _charge_battery->estimate_finish(entry.state);
-    //   if (battery_estimate.has_value())
-    //   {
-    //     new_node->assigned_tasks[entry.candidate].push_back(
-    //       Assignment
-    //       {
-    //         _charge_battery->id(),
-    //         battery_estimate.value().finish_state,
-    //         battery_estimate.value().wait_until
-    //       });
-    //     for (auto& new_u : new_node->unassigned_tasks)
-    //     {
-    //       const auto finish =
-    //         new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
-    //       if (finish.has_value())
-    //       {
-    //         new_u.second.candidates.update_candidate(
-    //           entry.candidate, finish.value().finish_state, finish.value().wait_until);
-    //       }
-    //       else
-    //       {
-    //         // we should stop expanding this node
-    //         return nullptr;
-    //       }
-    //     }
+    if (add_charger )
+    {
+      auto battery_estimate = _charge_battery->estimate_finish(entry.state);
+      if (battery_estimate.has_value())
+      {
+        new_node->assigned_tasks[entry.candidate].push_back(
+          Assignment
+          {
+            _charge_battery->id(),
+            battery_estimate.value().finish_state,
+            battery_estimate.value().wait_until
+          });
+        for (auto& new_u : new_node->unassigned_tasks)
+        {
+          const auto finish =
+            new_u.second.request->estimate_finish(battery_estimate.value().finish_state);
+          if (finish.has_value())
+          {
+            new_u.second.candidates.update_candidate(
+              entry.candidate, finish.value().finish_state, finish.value().wait_until);
+          }
+          else
+          {
+            // we should stop expanding this node
+            return nullptr;
+          }
+        }
         
-    //   }
-    //   else
-    //   {
-    //     // agent cannot make it back to the charger
-    //     return nullptr;
-    //   }
+      }
+      else
+      {
+        // agent cannot make it back to the charger
+        return nullptr;
+      }
       
-    // }
+    }
 
     // Update the cost estimate for new_node
     new_node->cost_estimate = compute_f(*new_node);
