@@ -988,22 +988,17 @@ public:
                 // its charger. If later, we pop assigned task until
                 // we can make it to the charger
                 auto parent_node = std::make_shared<Node>(*node);
-                RobotState state;
-                if (parent_node->assigned_tasks[it->second.candidate].empty())
-                {
-                  state = initial_states[it->second.candidate];
-                }
-                else
+                RobotState state = initial_states[it->second.candidate];
+                if (!parent_node->assigned_tasks[it->second.candidate].empty())
                 {
                   state = parent_node->assigned_tasks[it->second.candidate].back().state;
                 }
-                
-                if (state.battery_soc < 0.99)
+                    
+                if (state.battery_soc < 1.0)
                 {
                   while (!parent_node->assigned_tasks[it->second.candidate].empty())
                   {
-                    auto& assignments = parent_node->assigned_tasks[it->second.candidate];
-                    assignments.pop_back();
+                    parent_node->assigned_tasks[it->second.candidate].pop_back();
                     auto new_charge_node = expand_charger(
                       parent_node, it->second.candidate, initial_states);
                     if (new_charge_node)
