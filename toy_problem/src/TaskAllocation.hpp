@@ -949,7 +949,7 @@ public:
     return nullptr;
   }
 
-  ConstNodePtr greedy_solve(
+ConstNodePtr greedy_solve(
     ConstNodePtr node,
     const std::vector<RobotState> initial_states)
   {
@@ -976,39 +976,21 @@ public:
             // later case, we assign a charging task to the agent
             if (node->latest_time + segmentation_threshold > it->second.wait_until)
             {
-              const auto charge_node = expand_charger(
-                node, it->second.candidate, initial_states);
-              if (charge_node)
+              // agent has either full battery or insufficient charge to reach 
+              // its charger. If later, we pop assigned task until
+              // we can make it to the charger
+              auto parent_node = std::make_shared<Node>(*node);
+              while (!parent_node->assigned_tasks[it->second.candidate].empty())
               {
-                next_node = std::move(charge_node);
+                parent_node->assigned_tasks[it->second.candidate].pop_back();
+                auto new_charge_node = expand_charger(
+                  parent_node, it->second.candidate, initial_states);
+                if (new_charge_node)
+                {
+                  next_node = std::move(new_charge_node);
+                  break;
+                }
               }
-              else
-              {
-                // agent has either full battery or insufficient charge to reach 
-                // its charger. If later, we pop assigned task until
-                // we can make it to the charger
-                auto parent_node = std::make_shared<Node>(*node);
-                RobotState state = initial_states[it->second.candidate];
-                if (!parent_node->assigned_tasks[it->second.candidate].empty())
-                {
-                  state = parent_node->assigned_tasks[it->second.candidate].back().state;
-                }
-                    
-                if (state.battery_soc < 1.0)
-                {
-                  while (!parent_node->assigned_tasks[it->second.candidate].empty())
-                  {
-                    parent_node->assigned_tasks[it->second.candidate].pop_back();
-                    auto new_charge_node = expand_charger(
-                      parent_node, it->second.candidate, initial_states);
-                    if (new_charge_node)
-                    {
-                      next_node = std::move(new_charge_node);
-                      break;
-                    }
-                  }
-                }
-              } 
             }
           }
         }
